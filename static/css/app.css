@@ -425,6 +425,13 @@ body {
   flex-shrink: 0;
 }
 
+.source-card-figure {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+}
+
 .source-card-excerpt {
   font-size: 12px;
   color: var(--text-secondary);

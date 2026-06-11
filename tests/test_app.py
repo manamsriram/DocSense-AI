@@ -302,3 +302,148 @@ def test_documents_no_auth_returns_401():
     client = flask_app.app.test_client()
     res = client.get('/documents')
     assert res.status_code == 401
+
+
+# ---- Multimodal extraction tests ----
+
+def test_rows_to_markdown_basic():
+    from app import _rows_to_markdown
+    md = _rows_to_markdown([['Name', 'Value'], ['Revenue', '100'], [None, '200']])
+    lines = md.split('\n')
+    assert lines[0] == '| Name | Value |'
+    assert lines[1] == '| --- | --- |'
+    assert lines[2] == '| Revenue | 100 |'
+    assert lines[3] == '|  | 200 |'
+
+
+def test_find_caption_prefers_figure_pattern():
+    import pymupdf
+    from app import _find_caption
+    img_rect = pymupdf.Rect(100, 100, 300, 300)
+    blocks = [
+        (100, 320, 300, 340, 'Some nearby body text', 0, 0),
+        (100, 350, 300, 370, 'Figure 2: Quarterly revenue', 1, 0),
+    ]
+    assert _find_caption(blocks, img_rect) == 'Figure 2: Quarterly revenue'
+
+
+def test_find_caption_none_when_no_nearby_text():
+    import pymupdf
+    from app import _find_caption
+    img_rect = pymupdf.Rect(100, 100, 300, 300)
+    blocks = [(100, 600, 300, 620, 'Distant text', 0, 0)]
+    assert _find_caption(blocks, img_rect) is None
+
+
+# ---- build_source tests ----
+
+def test_build_source_plain_text_chunk():
+    from app import build_source
+    source, prompt_text = build_source(0.9, '[Page 3, Source: report.pdf] Some excerpt text')
+    assert source['page'] == 3
+    assert source['source'] == 'report.pdf'
+    assert source['text'] == 'Some excerpt text'
+    assert 'image_path' not in source
+    assert prompt_text == '[Page 3, Source: report.pdf] Some excerpt text'
+
+
+def test_build_source_figure_chunk_extracts_image_path():
+    from app import build_source
+    text = '[Page 2, Source: report.pdf] [Figure: user1/figures/report.pdf/p2_f0.png] Figure 1: Revenue'
+    source, prompt_text = build_source(0.8, text)
+    assert source['image_path'] == 'user1/figures/report.pdf/p2_f0.png'
+    assert source['text'] == 'Figure 1: Revenue'
+    assert '[Figure:' not in prompt_text
+
+
+def test_build_source_unparseable_falls_back():
+    from app import build_source
+    source, _ = build_source(0.5, 'raw text without prefix')
+    assert source['page'] == 0
+    assert source['source'] == 'unknown'
+
+
+# ---- /figure-url tests ----
+
+def test_figure_url_no_auth_returns_401():
+    import app as flask_app
+    flask_app.app.config['TESTING'] = True
+    client = flask_app.app.test_client()
+    res = client.get('/figure-url?path=anything')
+    assert res.status_code == 401
+
+
+# ---- Groq vision fallback tests ----
+
+def _vision_response(text):
+    resp = MagicMock()
+    resp.choices = [MagicMock(message=MagicMock(content=text))]
+    return resp
+
+
+def test_describe_image_with_groq_returns_description():
+    from app import describe_image_with_groq, _FIGURE_CAPTION_PROMPT
+    with patch('app.groq_client') as mock_client:
+        mock_client.chat.completions.create.return_value = _vision_response(
+            'Bar chart of quarterly revenue.'
+        )
+        out = describe_image_with_groq(b'fake-png', _FIGURE_CAPTION_PROMPT)
+        assert out == 'Bar chart of quarterly revenue.'
+        call = mock_client.chat.completions.create.call_args
+        from app import GROQ_VISION_MODEL
+        assert call.kwargs['model'] == GROQ_VISION_MODEL
+        content = call.kwargs['messages'][0]['content']
+        assert content[1]['image_url']['url'].startswith('data:image/png;base64,')
+
+
+def test_describe_image_with_groq_api_failure_returns_none():
+    from app import describe_image_with_groq, _FIGURE_CAPTION_PROMPT
+    with patch('app.groq_client') as mock_client:
+        mock_client.chat.completions.create.side_effect = RuntimeError('rate limited')
+        assert describe_image_with_groq(b'fake-png', _FIGURE_CAPTION_PROMPT) is None
+
+
+def test_describe_image_with_groq_oversized_image_returns_none():
+    from app import describe_image_with_groq, _FIGURE_CAPTION_PROMPT, MAX_VISION_B64_BYTES
+    with patch('app.groq_client') as mock_client:
+        big = b'x' * MAX_VISION_B64_BYTES  # b64 expands ~4/3, exceeds limit
+        assert describe_image_with_groq(big, _FIGURE_CAPTION_PROMPT) is None
+        mock_client.chat.completions.create.assert_not_called()
+
+
+def test_extract_page_figures_vision_fallback_for_captionless():
+    """Captionless figure gets a Groq caption when budget allows; spends budget."""
+    import pymupdf
+    doc = pymupdf.open()
+    page = doc.new_page()
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 100, 100), False)
+    pix.set_rect(pix.irect, (80, 80, 200))
+    page.insert_image(pymupdf.Rect(72, 100, 192, 220), pixmap=pix)
+    # no caption text anywhere on the page
+
+    from app import extract_page_figures
+    with patch('app.describe_image_with_groq', return_value='Scatter plot of test data.') as mock_vis:
+        budget = {'remaining': 2}
+        figures = extract_page_figures(page, vision_budget=budget)
+        assert len(figures) == 1
+        assert figures[0][0] == 'Scatter plot of test data.'
+        assert budget['remaining'] == 1
+        mock_vis.assert_called_once()
+    doc.close()
+
+
+def test_extract_page_figures_captionless_skipped_without_budget():
+    """No budget, no nearby text → figure skipped, no vision call."""
+    import pymupdf
+    doc = pymupdf.open()
+    page = doc.new_page()
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 100, 100), False)
+    pix.set_rect(pix.irect, (80, 80, 200))
+    page.insert_image(pymupdf.Rect(72, 100, 192, 220), pixmap=pix)
+
+    from app import extract_page_figures
+    with patch('app.describe_image_with_groq') as mock_vis:
+        assert extract_page_figures(page) == []
+        assert extract_page_figures(page, vision_budget={'remaining': 0}) == []
+        mock_vis.assert_not_called()
+    doc.close()

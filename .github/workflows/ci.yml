@@ -14,11 +14,18 @@ jobs:
       GROQ_API_KEY: dummy
       GEMINI_API_KEY: dummy
       SUPABASE_URL: https://dummy.supabase.co
-      SUPABASE_SERVICE_ROLE_KEY: dummy
+      SUPABASE_SERVICE_KEY: dummy
       SUPABASE_ANON_KEY: dummy
       QDRANT_URL: http://localhost:6333
+      QDRANT_API_KEY: dummy
       REDIS_URL: redis://localhost:6379
       SECRET_KEY: ci-secret-key
+
+    services:
+      qdrant:
+        image: qdrant/qdrant:v1.14.1
+        ports:
+          - 6333:6333
 
     steps:
       - uses: actions/checkout@v4

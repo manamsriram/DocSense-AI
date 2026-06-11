@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template, g
 from werkzeug.utils import secure_filename
 from functools import wraps
 from cachetools import TTLCache
+import base64
 import tempfile
 import redis
 import json
@@ -32,6 +33,7 @@ app = Flask(__name__, static_url_path='', static_folder='.')
 # LLM via Groq (free tier)
 groq_client = Groq(api_key=os.getenv('GROQ_API_KEY'))
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
+GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'meta-llama/llama-4-scout-17b-16e-instruct')
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
@@ -234,6 +236,187 @@ def pdf_to_pages(path):
         return []
 
 
+# ---- Multimodal extraction (rule-based, no LLM) ----
+
+CAPTION_RE = re.compile(r'^\s*(figure|fig\.|table|chart|exhibit)\s*\d', re.IGNORECASE)
+MIN_FIGURE_DIM_PT = 60          # skip icons/logos smaller than this
+MAX_FIGURE_PAGE_RATIO = 0.9     # skip full-page scans (no caption to harvest)
+MAX_FIGURES_PER_PAGE = 4
+CAPTION_SEARCH_MARGIN_PT = 90   # max vertical gap between image and its caption
+FIGURE_RENDER_DPI = 150
+MAX_TABLE_ROWS_PER_CHUNK = 25
+SCANNED_PAGE_RENDER_DPI = 120
+MAX_VISION_B64_BYTES = 4 * 1024 * 1024   # Groq base64 image limit
+MAX_VISION_CALLS_PER_DOC = 20            # rate-limit guard for large uploads
+
+_FIGURE_CAPTION_PROMPT = (
+    'Describe this figure from a document in 2-3 sentences for search indexing. '
+    'State the chart type, axis labels, and key values or trends if visible. '
+    'Return only the description.'
+)
+
+_SCANNED_PAGE_PROMPT = (
+    'Transcribe all readable text from this scanned document page in reading order. '
+    'Render any tables as markdown. Skip unreadable parts silently. '
+    'Return only the transcription.'
+)
+
+
+def describe_image_with_groq(png_bytes, prompt, max_tokens=300):
+    """Vision fallback (Groq Llama 4) for content rule-based extraction can't read.
+
+    Returns description text, or None on oversized input or API failure so
+    callers degrade to the no-AI behavior.
+    """
+    b64 = base64.b64encode(png_bytes).decode()
+    if len(b64) > MAX_VISION_B64_BYTES:
+        logging.warning(f"Image exceeds Groq vision size limit ({len(b64)} b64 bytes), skipping")
+        return None
+    try:
+        resp = groq_client.chat.completions.create(
+            model=GROQ_VISION_MODEL,
+            messages=[{
+                'role': 'user',
+                'content': [
+                    {'type': 'text', 'text': prompt},
+                    {'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{b64}'}},
+                ],
+            }],
+            max_tokens=max_tokens,
+            temperature=0.0,
+        )
+        return preprocess(resp.choices[0].message.content) or None
+    except Exception as e:
+        logging.warning(f"Groq vision call failed: {e}")
+        return None
+
+
+def _rows_to_markdown(rows):
+    """Render table rows (list of lists) as markdown; first row is the header."""
+    def fmt(cell):
+        return preprocess(str(cell)) if cell is not None else ''
+    header = [fmt(c) for c in rows[0]]
+    lines = [
+        '| ' + ' | '.join(header) + ' |',
+        '| ' + ' | '.join(['---'] * len(header)) + ' |',
+    ]
+    for row in rows[1:]:
+        lines.append('| ' + ' | '.join(fmt(c) for c in row) + ' |')
+    return '\n'.join(lines)
+
+
+def extract_page_tables(page):
+    """Detect tables via PyMuPDF's rule-based finder. Returns markdown strings.
+
+    Long tables are split into row groups with the header repeated so each
+    chunk stands alone for retrieval.
+    """
+    try:
+        tabs = page.find_tables()
+    except Exception as e:
+        logging.warning(f"find_tables failed on page {page.number + 1}: {e}")
+        return []
+    out = []
+    for tab in tabs.tables:
+        rows = [r for r in tab.extract() if any(c not in (None, '') for c in r)]
+        if len(rows) < 2 or max(len(r) for r in rows) < 2:
+            continue
+        header, body = rows[0], rows[1:]
+        for i in range(0, len(body), MAX_TABLE_ROWS_PER_CHUNK):
+            out.append(_rows_to_markdown([header] + body[i:i + MAX_TABLE_ROWS_PER_CHUNK]))
+    return out
+
+
+def _find_caption(blocks, img_rect):
+    """Nearest horizontally-overlapping text block above/below an image.
+
+    Blocks matching 'Figure N'-style patterns win over plain proximity.
+    """
+    candidates = []
+    for x0, y0, x1, y1, text, *_ in blocks:
+        text = preprocess(text)
+        if not text:
+            continue
+        if x1 < img_rect.x0 or x0 > img_rect.x1:
+            continue
+        if y0 >= img_rect.y1:
+            gap = y0 - img_rect.y1       # block below image
+        elif y1 <= img_rect.y0:
+            gap = img_rect.y0 - y1       # block above image
+        else:
+            continue
+        if gap > CAPTION_SEARCH_MARGIN_PT:
+            continue
+        candidates.append((not CAPTION_RE.match(text), gap, text))
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][2]
+
+
+def extract_page_figures(page, vision_budget=None):
+    """Returns [(caption, png_bytes)] for page images worth indexing.
+
+    Captions come from nearby text when available; otherwise a Groq vision
+    call describes the figure, spending from vision_budget ({'remaining': N}).
+    With no budget and no nearby text the figure is skipped — nothing to index.
+    """
+    try:
+        infos = page.get_image_info()
+    except Exception as e:
+        logging.warning(f"get_image_info failed on page {page.number + 1}: {e}")
+        return []
+    page_rect = page.rect
+    blocks = [b for b in page.get_text('blocks') if b[6] == 0]
+    figures = []
+    for info in infos:
+        if len(figures) >= MAX_FIGURES_PER_PAGE:
+            break
+        rect = pymupdf.Rect(info['bbox'])
+        if rect.width < MIN_FIGURE_DIM_PT or rect.height < MIN_FIGURE_DIM_PT:
+            continue
+        if rect.get_area() > MAX_FIGURE_PAGE_RATIO * page_rect.get_area():
+            continue
+        try:
+            pix = page.get_pixmap(clip=rect & page_rect, dpi=FIGURE_RENDER_DPI)
+            png_bytes = pix.tobytes('png')
+        except Exception as e:
+            logging.warning(f"Figure render failed on page {page.number + 1}: {e}")
+            continue
+        caption = _find_caption(blocks, rect)
+        if not caption and vision_budget and vision_budget['remaining'] > 0:
+            caption = describe_image_with_groq(png_bytes, _FIGURE_CAPTION_PROMPT)
+            if caption:
+                vision_budget['remaining'] -= 1
+        if not caption:
+            continue
+        figures.append((caption, png_bytes))
+    return figures
+
+
+def _delete_stored_figures(figure_dir):
+    try:
+        entries = supabase_admin.storage.from_('pdfs').list(figure_dir)
+        paths = [f"{figure_dir}/{e['name']}" for e in (entries or [])]
+        if paths:
+            supabase_admin.storage.from_('pdfs').remove(paths)
+    except Exception as e:
+        logging.warning(f"Could not clear old figures in {figure_dir}: {e}")
+
+
+def _upload_figure(path, png_bytes):
+    try:
+        supabase_admin.storage.from_('pdfs').upload(
+            path=path,
+            file=png_bytes,
+            file_options={'content-type': 'image/png'}
+        )
+        return True
+    except Exception as e:
+        logging.warning(f"Figure upload failed for {path}: {e}")
+        return False
+
+
 def index_pdf(pdf_path, user_id, force=False, display_name=None):
     """Extract, chunk, embed, and upsert a PDF into Qdrant for a specific user."""
     filename = display_name or os.path.basename(pdf_path)
@@ -260,24 +443,72 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
             logging.info(f"Already indexed: {filename}")
             return 0
 
-    pages = pdf_to_pages(pdf_path)
-    if not pages:
+    try:
+        doc = pymupdf.open(pdf_path)
+    except Exception as e:
+        logging.error(f"Error reading PDF {pdf_path}: {e}")
         return 0
 
-    points = []
-    embed_texts = []
-    display_texts = []
+    figure_dir = f"{user_id}/figures/{secure_filename(filename)}"
+    if force:
+        _delete_stored_figures(figure_dir)
 
-    for page_num, page_text in pages:
-        chunks = text_splitter.split_text(page_text)
-        for chunk_idx, chunk in enumerate(chunks):
-            if not chunk.strip():
-                continue
-            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{user_id}__{filename}__p{page_num}__c{chunk_idx}"))
-            display_text = f"[Page {page_num}, Source: {filename}] {chunk}"
-            embed_texts.append(chunk)
-            display_texts.append(display_text)
-            points.append((point_id, filename, page_num, display_text))
+    points = []       # (point_id, page_num, display_text, extra_payload)
+    embed_texts = []
+    counts = {'text': 0, 'table': 0, 'figure': 0, 'scanned': 0}
+    vision_budget = {'remaining': MAX_VISION_CALLS_PER_DOC}
+
+    for page_num in range(doc.page_count):
+        page = doc[page_num]
+        pno = page_num + 1
+
+        page_text = preprocess(page.get_text('text'))
+        chunk_type = 'text'
+        if not page_text and vision_budget['remaining'] > 0:
+            # No text layer — likely a scanned page; transcribe via Groq vision
+            try:
+                pix = page.get_pixmap(dpi=SCANNED_PAGE_RENDER_DPI)
+                page_text = describe_image_with_groq(
+                    pix.tobytes('png'), _SCANNED_PAGE_PROMPT, max_tokens=1500
+                )
+            except Exception as e:
+                logging.warning(f"Scanned-page render failed on page {pno}: {e}")
+                page_text = None
+            if page_text:
+                vision_budget['remaining'] -= 1
+                chunk_type = 'scanned'
+
+        if page_text:
+            for chunk_idx, chunk in enumerate(text_splitter.split_text(page_text)):
+                if not chunk.strip():
+                    continue
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{user_id}__{filename}__p{pno}__c{chunk_idx}"))
+                display_text = f"[Page {pno}, Source: {filename}] {chunk}"
+                embed_texts.append(chunk)
+                points.append((point_id, pno, display_text, {'type': chunk_type}))
+                counts[chunk_type] += 1
+
+        for t_idx, table_md in enumerate(extract_page_tables(page)):
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{user_id}__{filename}__p{pno}__t{t_idx}"))
+            display_text = f"[Page {pno}, Source: {filename}] [Table]\n{table_md}"
+            embed_texts.append(table_md)
+            points.append((point_id, pno, display_text, {'type': 'table'}))
+            counts['table'] += 1
+
+        for f_idx, (caption, png_bytes) in enumerate(extract_page_figures(page, vision_budget=vision_budget)):
+            image_path = f"{figure_dir}/p{pno}_f{f_idx}.png"
+            extra = {'type': 'figure'}
+            marker = ''
+            if _upload_figure(image_path, png_bytes):
+                extra['image_path'] = image_path
+                marker = f"[Figure: {image_path}] "
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{user_id}__{filename}__p{pno}__f{f_idx}"))
+            display_text = f"[Page {pno}, Source: {filename}] {marker}{caption}"
+            embed_texts.append(caption)
+            points.append((point_id, pno, display_text, extra))
+            counts['figure'] += 1
+
+    doc.close()
 
     if not points:
         return 0
@@ -290,12 +521,16 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
             PointStruct(
                 id=point_id,
                 vector=vec.tolist(),
-                payload={'source': filename, 'page': page_num, 'text': display_text, 'user_id': user_id}
+                payload={'source': filename, 'page': page_num, 'text': display_text, 'user_id': user_id, **extra}
             )
-            for (point_id, filename, page_num, display_text), vec in zip(points, vecs)
+            for (point_id, page_num, display_text, extra), vec in zip(points, vecs)
         ]
     )
-    logging.info(f"Indexed {len(points)} chunks from {filename} for user {user_id[:8]}...")
+    logging.info(
+        f"Indexed {len(points)} chunks from {filename} for user {user_id[:8]}... "
+        f"({counts['text']} text, {counts['table']} table, {counts['figure']} figure, "
+        f"{counts['scanned']} scanned)"
+    )
     return len(points)
 
 
@@ -536,6 +771,33 @@ def generate_text(prompt, conversation_history=None):
         return None
 
 
+_SOURCE_RE = re.compile(r'^\[Page (\d+), Source: ([^\]]+)\]\s*(.*)', re.DOTALL)
+_FIGURE_MARKER_RE = re.compile(r'\[Figure: ([^\]]+)\]\s*')
+
+
+def build_source(score, text):
+    """Parse a display chunk into a source dict. Returns (source, prompt_text).
+
+    Figure chunks carry their storage path in a [Figure: path] marker; it is
+    surfaced as image_path and stripped from the text sent to the LLM.
+    """
+    m_fig = _FIGURE_MARKER_RE.search(text)
+    clean = _FIGURE_MARKER_RE.sub('', text)
+    m = _SOURCE_RE.match(clean)
+    if m:
+        source = {
+            'page': int(m.group(1)),
+            'source': m.group(2),
+            'text': m.group(3).strip(),
+            'score': round(score, 4),
+        }
+    else:
+        source = {'page': 0, 'source': 'unknown', 'text': clean, 'score': round(score, 4)}
+    if m_fig:
+        source['image_path'] = m_fig.group(1)
+    return source, clean
+
+
 def ask_file(question, user_id, conversation_history=None):
     """Return (response_text, sources) for a specific user's documents."""
     scored_chunks = find_relevant_chunks(question, user_id, top_n=3)
@@ -549,17 +811,9 @@ def ask_file(question, user_id, conversation_history=None):
         "If the answer is not in the excerpts, say so.\n\n"
     )
     for score, text in scored_chunks:
-        prompt += f"{text}\n\n"
-        m = re.match(r'^\[Page (\d+), Source: ([^\]]+)\]\s*(.*)', text, re.DOTALL)
-        if m:
-            sources.append({
-                'page': int(m.group(1)),
-                'source': m.group(2),
-                'text': m.group(3).strip(),
-                'score': round(score, 4),
-            })
-        else:
-            sources.append({'page': 0, 'source': 'unknown', 'text': text, 'score': round(score, 4)})
+        source, prompt_text = build_source(score, text)
+        prompt += f"{prompt_text}\n\n"
+        sources.append(source)
 
     prompt += f"Question: {question}\nAnswer:"
     response = generate_text(prompt, conversation_history=conversation_history)
@@ -615,17 +869,9 @@ def ask_file_agentic(question, user_id, conversation_history=None):
             "If the answer is not in the excerpts, say so.\n\n"
         )
         for score, text in sorted(all_chunks, key=lambda x: x[0], reverse=True)[:6]:
-            prompt += f"{text}\n\n"
-            m = re.match(r'^\[Page (\d+), Source: ([^\]]+)\]\s*(.*)', text, re.DOTALL)
-            if m:
-                sources.append({
-                    'page': int(m.group(1)),
-                    'source': m.group(2),
-                    'text': m.group(3).strip(),
-                    'score': round(score, 4),
-                })
-            else:
-                sources.append({'page': 0, 'source': 'unknown', 'text': text, 'score': round(score, 4)})
+            source, prompt_text = build_source(score, text)
+            prompt += f"{prompt_text}\n\n"
+            sources.append(source)
 
         prompt += f"Question: {question}\nAnswer:"
         response = generate_text(prompt, conversation_history=conversation_history)
@@ -757,6 +1003,24 @@ def list_documents():
     except Exception as e:
         logging.error(f"Error in /documents: {e}")
         return jsonify({'documents': []}), 500
+
+
+@app.route('/figure-url', methods=['GET'])
+@require_auth
+def figure_url():
+    """Mint a short-lived signed URL for a figure image owned by the caller."""
+    path = request.args.get('path', '')
+    if '..' in path or not path.startswith(f"{g.user_id}/figures/"):
+        return jsonify({'error': 'Not found'}), 404
+    try:
+        res = supabase_admin.storage.from_('pdfs').create_signed_url(path, 3600)
+        url = res.get('signedURL') or res.get('signedUrl') or res.get('signed_url')
+        if not url:
+            raise ValueError(f"No signed URL in storage response: {res}")
+        return jsonify({'url': url})
+    except Exception as e:
+        logging.error(f"Error in /figure-url for {path}: {e}")
+        return jsonify({'error': 'Could not generate figure URL'}), 500
 
 
 @app.route('/history', methods=['GET'])

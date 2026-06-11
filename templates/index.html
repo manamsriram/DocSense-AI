@@ -206,6 +206,9 @@
               <span class="source-card-score" x-text="scorePercent(src.score)"></span>
             </div>
             <div class="source-card-excerpt" x-text="src.text"></div>
+            <template x-if="src.image_url">
+              <img class="source-card-figure" :src="src.image_url" alt="Figure from document" loading="lazy">
+            </template>
           </div>
         </template>
 

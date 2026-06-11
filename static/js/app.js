@@ -150,7 +150,25 @@ document.addEventListener('alpine:init', () => {
       }
       this.sources = session.questions.at(-1)?.sources || [];
       this.currentSessionId = session.session_id;
+      this._loadFigures();
       this.$nextTick(() => this._scrollToBottom());
+    },
+
+    /** Resolve signed URLs for figure sources so <img> tags can render them. */
+    async _loadFigures() {
+      for (const src of this.sources) {
+        if (!src.image_path || src.image_url) continue;
+        try {
+          const res = await fetch('/figure-url?path=' + encodeURIComponent(src.image_path), {
+            headers: this.authHeaders(),
+          });
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (data.url) src.image_url = data.url;
+        } catch (e) {
+          console.error('Failed to load figure:', e);
+        }
+      }
     },
 
     formatDate(iso) {
@@ -245,6 +263,7 @@ document.addEventListener('alpine:init', () => {
 
         this.messages.push({ role: 'bot', text, html: marked.parse(text) });
         this.sources = data.sources || [];
+        this._loadFigures();
         this.loadHistory();
       } catch (e) {
         const fallback = 'Something went wrong, please try again.';
