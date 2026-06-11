@@ -58,12 +58,16 @@ def test_sigmoid_negative():
 
 def test_ask_returns_response_and_sources():
     """Single-turn ask returns response text and parsed sources."""
+    chunks = [
+        (0.94, '[Page 4, Source: test.pdf] Some text here'),
+        (0.81, '[Page 12, Source: other.pdf] More text'),
+    ]
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain()), \
-         patch('app.find_relevant_chunks', return_value=[
-             (0.94, '[Page 4, Source: test.pdf] Some text here'),
-             (0.81, '[Page 12, Source: other.pdf] More text'),
-         ]), \
+         patch('app.get_collection_count', return_value=1), \
+         patch('app.decompose_query', return_value=['test question']), \
+         patch('app.grade_chunks', return_value=([c[1] for c in chunks], [])), \
+         patch('app.find_relevant_chunks', return_value=chunks), \
          patch('app.generate_text', return_value='Answer text'), \
          patch('app.get_cached_response', return_value=(None, None)), \
          patch('app.cache_response'):
@@ -130,11 +134,13 @@ def test_ask_multi_turn_passes_history_to_llm():
         captured['history'] = conversation_history
         return 'Follow-up answer'
 
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Some context')
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain(data=prior_turns)), \
-         patch('app.find_relevant_chunks', return_value=[
-             (0.9, '[Page 1, Source: doc.pdf] Some context'),
-         ]), \
+         patch('app.get_collection_count', return_value=1), \
+         patch('app.decompose_query', return_value=['Can you elaborate?']), \
+         patch('app.grade_chunks', return_value=([chunk[1]], [])), \
+         patch('app.find_relevant_chunks', return_value=[chunk]), \
          patch('app.generate_text', side_effect=fake_generate_text), \
          patch('app.get_cached_response', return_value=(None, None)), \
          patch('app.cache_response'):
@@ -177,11 +183,13 @@ def test_ask_saves_session_id_to_history():
 
     supabase_mock.table = capturing_table
 
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Context')
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', supabase_mock), \
-         patch('app.find_relevant_chunks', return_value=[
-             (0.9, '[Page 1, Source: doc.pdf] Context'),
-         ]), \
+         patch('app.get_collection_count', return_value=1), \
+         patch('app.decompose_query', return_value=['What is Y?']), \
+         patch('app.grade_chunks', return_value=([chunk[1]], [])), \
+         patch('app.find_relevant_chunks', return_value=[chunk]), \
          patch('app.generate_text', return_value='Answer'), \
          patch('app.get_cached_response', return_value=(None, None)), \
          patch('app.cache_response'):
