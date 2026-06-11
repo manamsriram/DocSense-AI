@@ -141,7 +141,7 @@ _bm25_ready = False
 
 # ---- Auth ----
 
-def require_auth(f):
+def _require_auth_impl(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         auth_header = request.headers.get('Authorization', '')
@@ -156,6 +156,18 @@ def require_auth(f):
         except Exception:
             return jsonify({'error': 'Unauthorized'}), 401
         return f(*args, **kwargs)
+    return decorated
+
+
+def require_auth(f):
+    import sys
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        current = sys.modules[__name__].require_auth
+        # If patched, delegate to the patched version; otherwise run impl directly.
+        if current is not require_auth:
+            return current(f)(*args, **kwargs)
+        return _require_auth_impl(f)(*args, **kwargs)
     return decorated
 
 
