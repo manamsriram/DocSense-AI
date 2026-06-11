@@ -67,7 +67,7 @@ def test_ask_returns_response_and_sources():
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.grade_chunks', return_value=([c[1] for c in chunks], [])), \
-         patch('app.find_relevant_chunks', return_value=chunks), \
+         patch('app.find_relevant_chunks_with_graph', return_value=chunks), \
          patch('app.generate_text', return_value='Answer text'), \
          patch('app.get_cached_response', return_value=(None, None)), \
          patch('app.cache_response'):
@@ -140,7 +140,7 @@ def test_ask_multi_turn_passes_history_to_llm():
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['Can you elaborate?']), \
          patch('app.grade_chunks', return_value=([chunk[1]], [])), \
-         patch('app.find_relevant_chunks', return_value=[chunk]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
          patch('app.generate_text', side_effect=fake_generate_text), \
          patch('app.get_cached_response', return_value=(None, None)), \
          patch('app.cache_response'):
@@ -189,7 +189,7 @@ def test_ask_saves_session_id_to_history():
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['What is Y?']), \
          patch('app.grade_chunks', return_value=([chunk[1]], [])), \
-         patch('app.find_relevant_chunks', return_value=[chunk]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
          patch('app.generate_text', return_value='Answer'), \
          patch('app.get_cached_response', return_value=(None, None)), \
          patch('app.cache_response'):

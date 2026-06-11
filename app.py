@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, render_template, g
+import networkx as nx
 from werkzeug.utils import secure_filename
 from functools import wraps
 from cachetools import TTLCache
@@ -16,7 +17,8 @@ import threading
 import uuid
 from dotenv import load_dotenv
 from groq import Groq
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from fastembed import TextEmbedding
 from fastembed.rerank.cross_encoder import TextCrossEncoder
 from qdrant_client import QdrantClient
@@ -37,8 +39,7 @@ GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'meta-llama/llama-4-scout-17b
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+_gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 COLLECTION = 'documents'
 
@@ -137,6 +138,10 @@ bm25_indices = {}   # user_id -> BM25Okapi
 bm25_corpora = {}   # user_id -> list of (point_id, display_text)
 bm25_lock = threading.Lock()
 _bm25_ready = False
+
+# Graph store — per-user NetworkX DiGraph, lazy-loaded from Supabase
+_graph_store = {}
+_graph_lock = threading.Lock()
 
 
 # ---- Auth ----
@@ -261,6 +266,10 @@ MAX_TABLE_ROWS_PER_CHUNK = 25
 SCANNED_PAGE_RENDER_DPI = 120
 MAX_VISION_B64_BYTES = 4 * 1024 * 1024   # Groq base64 image limit
 MAX_VISION_CALLS_PER_DOC = 20            # rate-limit guard for large uploads
+
+GRAPH_BATCH_SIZE = 4
+MAX_GRAPH_BATCHES_PER_DOC = 50
+MAX_GRAPH_NEIGHBORS = 10
 
 _FIGURE_CAPTION_PROMPT = (
     'Describe this figure from a document in 2-3 sentences for search indexing. '
@@ -443,6 +452,11 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
             ])
         )
         logging.info(f"Deleted existing chunks for {filename} (user {user_id[:8]}...)")
+        try:
+            supabase_admin.table('graph_edges').delete()\
+                .eq('user_id', user_id).eq('source_doc', filename).execute()
+        except Exception as e:
+            logging.warning(f"[graph] edge cleanup failed for {filename}: {e}")
     else:
         existing, _ = qdrant.scroll(
             collection_name=COLLECTION,
@@ -544,6 +558,23 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
         f"({counts['text']} text, {counts['table']} table, {counts['figure']} figure, "
         f"{counts['scanned']} scanned)"
     )
+
+    graph_eligible = [
+        (point_id, page_num, display_text)
+        for point_id, page_num, display_text, extra in points
+        if extra.get('type') in ('text', 'table', 'scanned')
+    ]
+    batches_run = 0
+    for i in range(0, len(graph_eligible), GRAPH_BATCH_SIZE):
+        if batches_run >= MAX_GRAPH_BATCHES_PER_DOC:
+            logging.info(f"[graph] batch cap reached for {filename}")
+            break
+        extract_and_store_graph(
+            graph_eligible[i: i + GRAPH_BATCH_SIZE], user_id, filename
+        )
+        batches_run += 1
+    logging.info(f"[graph] ran {batches_run} extraction batches for {filename}")
+
     return len(points)
 
 
@@ -636,6 +667,203 @@ def find_relevant_chunks(query, user_id, top_n=3):
     return [(_sigmoid(float(score)), texts[idx]) for idx, score in ranked[:top_n]]
 
 
+# ---- Graph RAG ----
+
+def extract_and_store_graph(batch_chunks, user_id, source_doc):
+    """Extract entity triples from a chunk batch and persist to Supabase.
+
+    batch_chunks: list of (chunk_id, page_num, text)
+    Failures are logged and silently skipped — must never block document indexing.
+    """
+    formatted = '\n\n'.join(
+        f'[{i}] {text[:600]}' for i, (_, _, text) in enumerate(batch_chunks)
+    )
+    try:
+        raw = _call_groq_helper(
+            _GRAPH_EXTRACT_PROMPT.format(chunks=formatted), max_tokens=700
+        )
+        results = _parse_llm_json(raw)
+        if not isinstance(results, list):
+            return
+    except Exception as e:
+        logging.warning(f"[graph] extraction failed for batch in {source_doc}: {e}")
+        return
+
+    nodes_to_upsert = {}
+    edges_to_insert = []
+
+    for item in results:
+        idx = item.get('chunk_index', 0)
+        if idx >= len(batch_chunks):
+            continue
+        chunk_id, page_num, _ = batch_chunks[idx]
+
+        for ent in item.get('entities', []):
+            name = ent.get('name', '').strip().lower()
+            if not name:
+                continue
+            if name not in nodes_to_upsert:
+                nodes_to_upsert[name] = {
+                    'user_id': user_id,
+                    'entity_name': name,
+                    'entity_type': ent.get('type'),
+                }
+
+        for triple in item.get('triples', []):
+            subj = triple.get('subject', '').strip().lower()
+            rel  = triple.get('relation', '').strip().lower()
+            obj  = triple.get('object', '').strip().lower()
+            if not (subj and rel and obj):
+                continue
+            edges_to_insert.append({
+                'user_id': user_id,
+                'source_entity': subj,
+                'relation': rel,
+                'target_entity': obj,
+                'chunk_id': chunk_id,
+                'source_doc': source_doc,
+                'page_num': page_num,
+            })
+
+    if nodes_to_upsert:
+        try:
+            supabase_admin.table('graph_nodes').upsert(
+                list(nodes_to_upsert.values()),
+                on_conflict='user_id,entity_name'
+            ).execute()
+        except Exception as e:
+            logging.warning(f"[graph] node upsert failed: {e}")
+
+    if edges_to_insert:
+        try:
+            supabase_admin.table('graph_edges').insert(edges_to_insert).execute()
+        except Exception as e:
+            logging.warning(f"[graph] edge insert failed: {e}")
+
+
+def _build_graph_from_supabase(user_id):
+    try:
+        nodes_res = supabase_admin.table('graph_nodes')\
+            .select('entity_name,entity_type')\
+            .eq('user_id', user_id).execute()
+        edges_res = supabase_admin.table('graph_edges')\
+            .select('source_entity,relation,target_entity,chunk_id,source_doc,page_num')\
+            .eq('user_id', user_id).execute()
+    except Exception as e:
+        logging.warning(f"[graph] failed to load graph for user {user_id[:8]}...: {e}")
+        return nx.DiGraph()
+
+    G = nx.DiGraph()
+    for node in (nodes_res.data or []):
+        G.add_node(node['entity_name'], entity_type=node.get('entity_type'))
+    for edge in (edges_res.data or []):
+        G.add_edge(
+            edge['source_entity'], edge['target_entity'],
+            relation=edge['relation'],
+            chunk_id=edge['chunk_id'],
+            source_doc=edge['source_doc'],
+            page_num=edge.get('page_num'),
+        )
+    logging.info(
+        f"[graph] loaded {G.number_of_nodes()} nodes, {G.number_of_edges()} "
+        f"edges for user {user_id[:8]}..."
+    )
+    return G
+
+
+def get_graph_for_user(user_id):
+    with _graph_lock:
+        if user_id in _graph_store:
+            return _graph_store[user_id]
+    G = _build_graph_from_supabase(user_id)
+    with _graph_lock:
+        if user_id not in _graph_store:
+            _graph_store[user_id] = G
+        return _graph_store[user_id]
+
+
+def rebuild_graph_for_user(user_id):
+    with _graph_lock:
+        _graph_store.pop(user_id, None)
+    get_graph_for_user(user_id)
+    logging.info(f"[graph] cache refreshed for user {user_id[:8]}...")
+
+
+def graph_expand_candidates(query, user_id, existing_texts):
+    """Return [(0.5, text), ...] for graph-neighbor chunks not in existing_texts.
+
+    Uses 2-hop BFS from entities found by substring match in the query.
+    Score 0.5 is a placeholder — all candidates pass through the reranker together.
+    """
+    G = get_graph_for_user(user_id)
+    if not G or G.number_of_nodes() == 0:
+        return []
+
+    query_lower = query.lower()
+    matched_nodes = [node for node in G.nodes() if node in query_lower]
+    if not matched_nodes:
+        return []
+
+    neighbor_chunk_ids = set()
+    for node in matched_nodes:
+        try:
+            subgraph = nx.ego_graph(G, node, radius=2)
+        except Exception:
+            continue
+        for n in subgraph.nodes():
+            for _, _, data in G.edges(n, data=True):
+                cid = data.get('chunk_id')
+                if cid:
+                    neighbor_chunk_ids.add(cid)
+
+    if not neighbor_chunk_ids:
+        return []
+
+    try:
+        results = qdrant.retrieve(
+            collection_name=COLLECTION,
+            ids=list(neighbor_chunk_ids)[: MAX_GRAPH_NEIGHBORS * 2],
+            with_payload=True,
+        )
+    except Exception as e:
+        logging.warning(f"[graph] Qdrant retrieve failed: {e}")
+        return []
+
+    expanded = []
+    for r in results:
+        text = r.payload.get('text', '')
+        if text and text not in existing_texts:
+            expanded.append((0.5, text))
+        if len(expanded) >= MAX_GRAPH_NEIGHBORS:
+            break
+
+    if expanded:
+        logging.info(f"[graph] expanded {len(expanded)} neighbor chunks for query")
+    return expanded
+
+
+def find_relevant_chunks_with_graph(query, user_id, top_n=5):
+    """Hybrid retrieval + graph expansion, reranked as one pool."""
+    if get_collection_count(user_id) == 0:
+        return []
+
+    candidates = hybrid_search(query, user_id, top_k=20)
+    if not candidates:
+        return []
+
+    existing_texts = {text for _, text in candidates}
+    graph_candidates = graph_expand_candidates(query, user_id, existing_texts)
+
+    all_candidates = candidates + [
+        (f'graph_{i}', text) for i, (_, text) in enumerate(graph_candidates)
+    ]
+    texts = [text for _, text in all_candidates]
+
+    scores = list(get_reranker_model().rerank(query, texts))
+    ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+    return [(_sigmoid(float(score)), texts[idx]) for idx, score in ranked[:top_n]]
+
+
 # ---- LLM ----
 
 _SYSTEM_PROMPT = (
@@ -667,6 +895,22 @@ _REFORMULATE_PROMPT = (
     'Rewritten query (return ONLY the query text):'
 )
 
+_GRAPH_EXTRACT_PROMPT = (
+    'Extract entities and relationships from each document chunk below.\n\n'
+    'Entity types: PERSON, ORG, CONCEPT, LOCATION, DATE, METRIC\n'
+    'Relations — use ONLY these: acquired_by, owns, reports_to, caused_by, '
+    'has_obligation, depends_on, related_to, part_of, occurred_at, '
+    'measured_by, approved_by, responsible_for, defines, mentioned_with\n\n'
+    'Rules:\n'
+    '- Normalize entity names to canonical lowercase\n'
+    '- Max 5 entities and 8 triples per chunk\n'
+    '- Only include triples where both subject and object are in your entities list\n'
+    '- Return ONLY a JSON array, one object per chunk, in input order\n\n'
+    'Format: [{{"chunk_index":0,"entities":[{{"name":"...","type":"..."}}],'
+    '"triples":[{{"subject":"...","relation":"...","object":"..."}}]}}, ...]\n\n'
+    'Chunks:\n{chunks}'
+)
+
 
 def _parse_llm_json(content):
     """Strip markdown code fences then parse JSON. Raises ValueError on failure."""
@@ -695,10 +939,9 @@ def _call_groq_helper(user_content, max_tokens, temperature=0.0):
         return resp.choices[0].message.content.strip()
     except Exception as e:
         logging.warning(f"Groq helper failed ({e}), trying Gemini")
-    if not GEMINI_API_KEY:
+    if not _gemini_client:
         raise RuntimeError("Groq failed and no GEMINI_API_KEY configured")
-    model = genai.GenerativeModel(model_name=GEMINI_MODEL)
-    resp = model.generate_content(user_content)
+    resp = _gemini_client.models.generate_content(model=GEMINI_MODEL, contents=user_content)
     return resp.text.strip()
 
 
@@ -767,16 +1010,19 @@ def generate_text(prompt, conversation_history=None):
     except Exception as e:
         logging.warning(f"Groq failed, trying Gemini fallback: {e}")
 
-    if not GEMINI_API_KEY:
+    if not _gemini_client:
         logging.error("Groq failed and no GEMINI_API_KEY configured")
         return None
     try:
-        model = genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=_SYSTEM_PROMPT)
-        # Gemini uses a different multi-turn format
-        chat = model.start_chat(history=[
-            {'role': 'user' if i % 2 == 0 else 'model', 'parts': [m['content']]}
-            for i, m in enumerate(messages[1:-1])  # skip system + last user turn
-        ])
+        history = []
+        for turn in (conversation_history or []):
+            history.append(genai_types.Content(role='user', parts=[genai_types.Part(text=turn['question'])]))
+            history.append(genai_types.Content(role='model', parts=[genai_types.Part(text=turn['answer'])]))
+        chat = _gemini_client.chats.create(
+            model=GEMINI_MODEL,
+            history=history,
+            config=genai_types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
+        )
         response = chat.send_message(prompt)
         return response.text.strip()
     except Exception as e:
@@ -853,7 +1099,7 @@ def ask_file_agentic(question, user_id, conversation_history=None):
 
         for sub_q in sub_queries:
             retrieval_query = f"{prior_q} {sub_q}" if prior_q else sub_q
-            scored = find_relevant_chunks(retrieval_query, user_id, top_n=5)
+            scored = find_relevant_chunks_with_graph(retrieval_query, user_id, top_n=5)
             if not scored:
                 continue
 
@@ -863,7 +1109,7 @@ def ask_file_agentic(question, user_id, conversation_history=None):
             if not relevant:
                 logging.info(f"[agentic] no relevant chunks for '{retrieval_query}', reformulating")
                 retrieval_query = reformulate_query(retrieval_query)
-                scored = find_relevant_chunks(retrieval_query, user_id, top_n=5)
+                scored = find_relevant_chunks_with_graph(retrieval_query, user_id, top_n=5)
                 relevant = [text for _, text in scored]
 
             for score, text in scored:
@@ -982,6 +1228,7 @@ def upload_pdf():
         # Index to Qdrant
         count = index_pdf(tmp.name, user_id, force=True, display_name=original_name)
         rebuild_bm25_for_user(user_id)
+        rebuild_graph_for_user(user_id)
 
         # Upsert documents record in Supabase
         supabase_admin.table('documents').delete().eq('user_id', user_id).eq('filename', filename).execute()
