@@ -161,11 +161,12 @@ def _require_auth_impl(f):
 
 def require_auth(f):
     import sys
+    _self = require_auth  # capture the original function object as a closure variable
     @wraps(f)
     def decorated(*args, **kwargs):
         current = sys.modules[__name__].require_auth
         # If patched, delegate to the patched version; otherwise run impl directly.
-        if current is not require_auth:
+        if current is not _self:
             return current(f)(*args, **kwargs)
         return _require_auth_impl(f)(*args, **kwargs)
     return decorated
