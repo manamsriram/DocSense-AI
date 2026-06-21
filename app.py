@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import time
 import pymupdf
 import numpy as np
 import logging
@@ -142,6 +143,15 @@ _bm25_ready = False
 # Graph store — per-user NetworkX DiGraph, lazy-loaded from Supabase
 _graph_store = {}
 _graph_lock = threading.Lock()
+
+
+# ---- Perf helpers ----
+
+def _timed(label, fn, *args, **kwargs):
+    t = time.perf_counter()
+    result = fn(*args, **kwargs)
+    logging.info(f"[perf] {label}: {(time.perf_counter() - t) * 1000:.1f}ms")
+    return result
 
 
 # ---- Auth ----
@@ -977,6 +987,8 @@ def grade_chunks(query, chunks):
         relevant_indices = {int(i) for i in grades.get('relevant', [])}
         relevant = [chunks[i] for i in relevant_indices if i < len(chunks)]
         irrelevant = [chunks[i] for i in range(len(chunks)) if i not in relevant_indices]
+        precision = len(relevant) / len(chunks) if chunks else 0
+        logging.info(f"[eval] crag_precision={precision:.2f} relevant={len(relevant)}/{len(chunks)} query={query[:60]!r}")
         return relevant, irrelevant
     except Exception as e:
         logging.warning(f"Chunk grading failed: {e}")
@@ -1008,7 +1020,7 @@ def generate_text(prompt, conversation_history=None):
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        logging.warning(f"Groq failed, trying Gemini fallback: {e}")
+        logging.warning(f"[eval] groq_fallback=true reason={e}")
 
     if not _gemini_client:
         logging.error("Groq failed and no GEMINI_API_KEY configured")
@@ -1083,11 +1095,12 @@ def ask_file(question, user_id, conversation_history=None):
 
 def ask_file_agentic(question, user_id, conversation_history=None):
     """Agentic RAG: query decomp + CRAG loop + synthesis. Falls back to ask_file() on error."""
+    t_total = time.perf_counter()
     try:
         if get_collection_count(user_id) == 0:
             return "No documents have been indexed yet. Please upload a PDF first.", []
 
-        sub_queries = decompose_query(question)
+        sub_queries = _timed("decompose_query", decompose_query, question)
         logging.info(f"[agentic] decomposed into {len(sub_queries)} sub-queries: {sub_queries}")
 
         # Anchor retrieval to prior turn so follow-ups ("what about its revenue?")
@@ -1096,27 +1109,31 @@ def ask_file_agentic(question, user_id, conversation_history=None):
 
         all_chunks = []
         seen_texts = set()
+        reformulation_count = 0
 
         for sub_q in sub_queries:
             retrieval_query = f"{prior_q} {sub_q}" if prior_q else sub_q
-            scored = find_relevant_chunks_with_graph(retrieval_query, user_id, top_n=5)
+            scored = _timed("retrieval", find_relevant_chunks_with_graph, retrieval_query, user_id, top_n=5)
             if not scored:
                 continue
 
             texts = [text for _, text in scored]
-            relevant, _ = grade_chunks(sub_q, texts)
+            relevant, _ = _timed("grade_chunks", grade_chunks, sub_q, texts)
 
             if not relevant:
                 logging.info(f"[agentic] no relevant chunks for '{retrieval_query}', reformulating")
-                retrieval_query = reformulate_query(retrieval_query)
-                scored = find_relevant_chunks_with_graph(retrieval_query, user_id, top_n=5)
+                retrieval_query = _timed("reformulate_query", reformulate_query, retrieval_query)
+                scored = _timed("retrieval_retry", find_relevant_chunks_with_graph, retrieval_query, user_id, top_n=5)
                 relevant = [text for _, text in scored]
+                reformulation_count += 1
 
             for score, text in scored:
                 if text in seen_texts or text not in relevant:
                     continue
                 seen_texts.add(text)
                 all_chunks.append((score, text))
+
+        logging.info(f"[eval] reformulations={reformulation_count} total_chunks={len(all_chunks)}")
 
         if not all_chunks:
             return "I couldn't find relevant information in your documents to answer this question.", []
@@ -1133,9 +1150,11 @@ def ask_file_agentic(question, user_id, conversation_history=None):
             sources.append(source)
 
         prompt += f"Question: {question}\nAnswer:"
-        response = generate_text(prompt, conversation_history=conversation_history)
+        response = _timed("generate_text", generate_text, prompt, conversation_history=conversation_history)
         if response is None:
             return None, []
+
+        logging.info(f"[perf] ask_file_agentic total: {(time.perf_counter() - t_total) * 1000:.1f}ms")
         return response, sources
 
     except Exception as e:
@@ -1150,17 +1169,21 @@ def get_cached_response(cache_key):
     with _memory_cache_lock:
         hit = _memory_cache.get(cache_key)
     if hit is not None:
+        logging.info("[cache] L1 hit")
         return hit
     if not redis_client:
+        logging.info("[cache] miss (no redis)")
         return None, None
     try:
         cached = redis_client.get(cache_key)
         if not cached:
+            logging.info("[cache] miss")
             return None, None
         data = json.loads(cached)
         result = (data.get('response'), data.get('sources', []))
         with _memory_cache_lock:
             _memory_cache[cache_key] = result
+        logging.info("[cache] L2 hit")
         return result
     except Exception:
         return None, None
