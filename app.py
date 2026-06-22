@@ -863,6 +863,7 @@ def find_relevant_chunks_with_graph(query, user_id, top_n=5):
 
     existing_texts = {text for _, text in candidates}
     graph_candidates = graph_expand_candidates(query, user_id, existing_texts)
+    graph_texts = {text for _, text in graph_candidates}
 
     all_candidates = candidates + [
         (f'graph_{i}', text) for i, (_, text) in enumerate(graph_candidates)
@@ -871,7 +872,14 @@ def find_relevant_chunks_with_graph(query, user_id, top_n=5):
 
     scores = list(get_reranker_model().rerank(query, texts))
     ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-    return [(_sigmoid(float(score)), texts[idx]) for idx, score in ranked[:top_n]]
+    result = [(_sigmoid(float(score)), texts[idx]) for idx, score in ranked[:top_n]]
+
+    graph_in_top = sum(1 for _, text in result if text in graph_texts)
+    logging.info(
+        f"[eval] retrieval pool={len(texts)} graph_expanded={len(graph_texts)} "
+        f"graph_in_top{top_n}={graph_in_top}"
+    )
+    return result
 
 
 # ---- LLM ----

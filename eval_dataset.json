@@ -1,0 +1,22 @@
+[
+  {
+    "question": "What is the main topic of this document?",
+    "ground_truth": ""
+  },
+  {
+    "question": "What are the key findings or conclusions?",
+    "ground_truth": ""
+  },
+  {
+    "question": "Who are the authors or organizations mentioned?",
+    "ground_truth": ""
+  },
+  {
+    "question": "What dates or time periods are referenced?",
+    "ground_truth": ""
+  },
+  {
+    "question": "What metrics or numerical values are reported?",
+    "ground_truth": ""
+  }
+]
