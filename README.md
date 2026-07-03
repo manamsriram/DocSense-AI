@@ -32,6 +32,7 @@ DocSense AI lets users upload PDF documents and query them using natural languag
 - **Graph RAG** — Entities and relationships are extracted at index time into a per-user NetworkX graph stored in Supabase. At query time, 2-hop BFS expansion enriches retrieved chunks with semantically linked neighbors from across the document set.
 - **Multimodal RAG** — Tables and figures are extracted during indexing. Captionless figures and scanned pages are captioned by Groq's Llama 4 Scout vision model before entering the retrieval pipeline.
 - **Two-Tier Caching** — L1 in-memory TTLCache for hot responses; L2 Redis (Upstash) for distributed persistence; SQLite as a fallback when Redis is unavailable.
+- **Semantic Cache** — Exact-match cache misses fall through to a cosine-similarity lookup over per-user cached Q&A (embedding reused from retrieval), so differently-worded repeats of the same question ("reset my password" vs "forgot password") still hit cache. Matches require the same model version and knowledge-base version, so a reindex or model change invalidates stale entries automatically.
 - **Multi-Turn Sessions** — Conversation history is stored in Supabase and forwarded to the LLM on each turn, enabling coherent follow-up questions across a session.
 - **Source Citations** — Every answer includes chunk snippets, source file names, page numbers, and sigmoid-normalized confidence scores.
 - **Supabase Auth** — JWT-based authentication protects all API endpoints; per-user document isolation at the vector, graph, and history layer.
@@ -111,6 +112,11 @@ SUPABASE_SERVICE_KEY=your_service_key
 
 # Cache (optional)
 REDIS_URL=rediss://default:<token>@<host>.upstash.io:6379
+
+# Semantic cache (optional)
+SEMANTIC_CACHE_THRESHOLD=0.93
+SEMANTIC_CACHE_L1_MAX=500
+SEMANTIC_CACHE_PER_USER_MAX=50
 ```
 
 ### Running Locally
@@ -144,7 +150,7 @@ The container starts Gunicorn on port `10000`.
 
 **Query flow:** question → (optional) query decomposition → hybrid search (Qdrant dense + BM25 sparse, fused via RRF) → graph expansion (2-hop BFS on knowledge graph) → cross-encoder rerank → CRAG grading loop → `generate_text()` (Groq / Gemini fallback) → response with citations.
 
-**Caching:** cache key hashed from `(user_id, question, session_id)` → check TTLCache → check Redis → check SQLite → on miss, run full pipeline and populate all layers.
+**Caching:** cache key hashed from `(user_id, question, session_id)` → check TTLCache → check Redis → check SQLite → on exact-match miss, check semantic cache (cosine similarity over per-user cached Q&A, gated by model version + knowledge-base version) → on full miss, run full pipeline and populate all layers.
 
 ## API Reference
 

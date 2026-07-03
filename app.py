@@ -11,6 +11,8 @@ import math
 import os
 import re
 import time
+import itertools
+from collections import OrderedDict
 import pymupdf
 import numpy as np
 import logging
@@ -1170,6 +1172,137 @@ def ask_file_agentic(question, user_id, conversation_history=None):
         return ask_file(question, user_id, conversation_history=conversation_history)
 
 
+# ---- Semantic cache ----
+
+def _cosine_similarity(a, b):
+    a = np.asarray(a, dtype=np.float32)
+    b = np.asarray(b, dtype=np.float32)
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    if denom == 0:
+        return 0.0
+    return float(np.dot(a, b) / denom)
+
+
+_kb_version_cache = {}
+_kb_version_lock = threading.Lock()
+
+
+def get_kb_version(user_id):
+    with _kb_version_lock:
+        if user_id in _kb_version_cache:
+            return _kb_version_cache[user_id]
+    version = 0
+    if redis_client:
+        try:
+            raw = redis_client.get(f"kbversion:{user_id}")
+            if raw is not None:
+                version = int(raw)
+        except Exception:
+            version = 0
+    with _kb_version_lock:
+        _kb_version_cache[user_id] = version
+    return version
+
+
+def bump_kb_version(user_id):
+    current = get_kb_version(user_id)
+    new_version = current + 1
+    with _kb_version_lock:
+        _kb_version_cache[user_id] = new_version
+    if redis_client:
+        try:
+            redis_client.set(f"kbversion:{user_id}", new_version)
+        except Exception:
+            pass
+    return new_version
+
+
+# Global-bounded hot subset (ponytail: flat OrderedDict as manual LRU, not per-user,
+# so memory stays capped regardless of user count — upgrade to a real LRU cache lib
+# only if profiling shows this is a bottleneck). Redis is the source of truth (off-box).
+SEMANTIC_CACHE_THRESHOLD = float(os.getenv('SEMANTIC_CACHE_THRESHOLD', '0.93'))
+SEMANTIC_CACHE_L1_MAX = int(os.getenv('SEMANTIC_CACHE_L1_MAX', '500'))
+SEMANTIC_CACHE_PER_USER_MAX = int(os.getenv('SEMANTIC_CACHE_PER_USER_MAX', '50'))
+
+_semantic_l1 = OrderedDict()
+_semantic_l1_lock = threading.Lock()
+_semantic_entry_ids = itertools.count()
+
+
+def _semantic_redis_key(user_id):
+    return f"semcache:{user_id}"
+
+
+def _semantic_l1_put(user_id, entry):
+    key = (user_id, next(_semantic_entry_ids))
+    with _semantic_l1_lock:
+        _semantic_l1[key] = entry
+        _semantic_l1.move_to_end(key)
+        while len(_semantic_l1) > SEMANTIC_CACHE_L1_MAX:
+            _semantic_l1.popitem(last=False)
+
+
+def _semantic_l1_user_entries(user_id):
+    with _semantic_l1_lock:
+        return [entry for (uid, _), entry in _semantic_l1.items() if uid == user_id]
+
+
+def semantic_cache_store(user_id, question, query_vec, response, sources, model_version, kb_version):
+    entry = {
+        'question': question,
+        'query_vec': [float(x) for x in query_vec],
+        'response': response,
+        'sources': sources,
+        'model_version': model_version,
+        'kb_version': kb_version,
+    }
+    _semantic_l1_put(user_id, entry)
+    if not redis_client:
+        return
+    try:
+        key = _semantic_redis_key(user_id)
+        raw = redis_client.get(key)
+        entries = json.loads(raw) if raw else []
+        entries.append(entry)
+        if len(entries) > SEMANTIC_CACHE_PER_USER_MAX:
+            entries = entries[-SEMANTIC_CACHE_PER_USER_MAX:]
+        redis_client.set(key, json.dumps(entries))
+    except Exception:
+        pass
+
+
+def semantic_cache_lookup(user_id, query_vec, model_version, kb_version):
+    """Best cosine match for this user's cached entries above SEMANTIC_CACHE_THRESHOLD.
+
+    Metadata (model_version, kb_version) must match exactly — a high similarity score
+    alone is never enough, since a reindex or model change can invalidate old answers.
+    """
+    candidates = _semantic_l1_user_entries(user_id)
+    if not candidates and redis_client:
+        try:
+            raw = redis_client.get(_semantic_redis_key(user_id))
+            candidates = json.loads(raw) if raw else []
+        except Exception:
+            candidates = []
+
+    best_entry = None
+    best_score = -1.0
+    for entry in candidates:
+        if entry.get('model_version') != model_version or entry.get('kb_version') != kb_version:
+            continue
+        score = _cosine_similarity(query_vec, entry['query_vec'])
+        if score > best_score:
+            best_score = score
+            best_entry = entry
+
+    if best_entry is not None and best_score >= SEMANTIC_CACHE_THRESHOLD:
+        logging.info(f"[semantic-cache] hit score={best_score:.3f}")
+        return best_entry['response'], best_entry['sources']
+    if best_entry is not None:
+        logging.info(f"[semantic-cache] near-miss score={best_score:.3f} threshold={SEMANTIC_CACHE_THRESHOLD}")
+    return None, None
+
+
 # ---- Cache ----
 
 def get_cached_response(cache_key):
@@ -1260,6 +1393,7 @@ def upload_pdf():
         count = index_pdf(tmp.name, user_id, force=True, display_name=original_name)
         rebuild_bm25_for_user(user_id)
         rebuild_graph_for_user(user_id)
+        bump_kb_version(user_id)
 
         # Upsert documents record in Supabase
         supabase_admin.table('documents').delete().eq('user_id', user_id).eq('filename', filename).execute()
@@ -1392,12 +1526,24 @@ def ask():
         response, sources = get_cached_response(cache_key) if cache_key else (None, None)
         from_cache = response is not None
 
+        query_vec = None
+        kb_version = None
+        if response is None and cache_key:
+            query_vec = list(get_embedding_model().embed([question]))[0].tolist()
+            kb_version = get_kb_version(user_id)
+            response, sources = semantic_cache_lookup(user_id, query_vec, GEMINI_MODEL, kb_version)
+            from_cache = response is not None
+
         if response is None:
             response, sources = ask_file_agentic(question, user_id, conversation_history=conversation_history)
 
         if response is not None and 'No documents' not in response:
             if not from_cache and cache_key:
                 cache_response(cache_key, response, sources)
+                if query_vec is None:
+                    query_vec = list(get_embedding_model().embed([question]))[0].tolist()
+                    kb_version = get_kb_version(user_id)
+                semantic_cache_store(user_id, question, query_vec, response, sources, GEMINI_MODEL, kb_version)
             # Always save to history when a session is active so subsequent
             # turns can fetch this turn as context.
             if session_id or not from_cache:

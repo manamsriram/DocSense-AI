@@ -35,6 +35,110 @@ def _supabase_chain(data=None):
     return mock
 
 
+# ---- Semantic cache: cosine similarity ----
+
+def test_cosine_similarity_identical_vectors_is_one():
+    from app import _cosine_similarity
+    assert abs(_cosine_similarity([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) - 1.0) < 1e-6
+
+
+def test_cosine_similarity_orthogonal_vectors_is_zero():
+    from app import _cosine_similarity
+    assert abs(_cosine_similarity([1.0, 0.0], [0.0, 1.0])) < 1e-6
+
+
+def test_cosine_similarity_opposite_vectors_is_negative_one():
+    from app import _cosine_similarity
+    assert abs(_cosine_similarity([1.0, 0.0], [-1.0, 0.0]) - (-1.0)) < 1e-6
+
+
+# ---- Semantic cache: kb_version ----
+
+def test_get_kb_version_defaults_to_zero_for_new_user():
+    from app import get_kb_version
+    with patch('app.redis_client', None):
+        assert get_kb_version('kbv-user-fresh-1') == 0
+
+
+def test_bump_kb_version_increments_and_persists_in_process():
+    from app import get_kb_version, bump_kb_version
+    user_id = 'kbv-user-bump-1'
+    with patch('app.redis_client', None):
+        assert get_kb_version(user_id) == 0
+        new_version = bump_kb_version(user_id)
+        assert new_version == 1
+        assert get_kb_version(user_id) == 1
+        assert bump_kb_version(user_id) == 2
+
+
+def test_bump_kb_version_writes_to_redis_when_available():
+    from app import bump_kb_version
+    with patch('app.redis_client') as mock_redis:
+        mock_redis.get.return_value = None
+        bump_kb_version('kbv-user-redis-2')
+        mock_redis.set.assert_called_once_with('kbversion:kbv-user-redis-2', 1)
+
+
+# ---- Semantic cache: store/lookup ----
+
+def test_semantic_cache_lookup_miss_when_empty():
+    from app import semantic_cache_lookup
+    with patch('app.redis_client', None):
+        response, sources = semantic_cache_lookup('semc-user-1', [1.0, 0.0, 0.0], 'model-a', 0)
+        assert response is None
+        assert sources is None
+
+
+def test_semantic_cache_hit_for_similar_vector():
+    from app import semantic_cache_store, semantic_cache_lookup
+    with patch('app.redis_client', None):
+        semantic_cache_store('semc-user-2', 'How do I reset my password?', [1.0, 0.0, 0.0],
+                              'Reset via settings.', [{'source': 'faq.pdf'}], 'model-a', 0)
+        response, sources = semantic_cache_lookup('semc-user-2', [0.99, 0.01, 0.0], 'model-a', 0)
+        assert response == 'Reset via settings.'
+        assert sources == [{'source': 'faq.pdf'}]
+
+
+def test_semantic_cache_miss_below_threshold():
+    from app import semantic_cache_store, semantic_cache_lookup
+    with patch('app.redis_client', None):
+        semantic_cache_store('semc-user-3', 'How do I reset my password?', [1.0, 0.0, 0.0],
+                              'Reset via settings.', [], 'model-a', 0)
+        response, sources = semantic_cache_lookup('semc-user-3', [0.0, 1.0, 0.0], 'model-a', 0)
+        assert response is None
+        assert sources is None
+
+
+def test_semantic_cache_miss_on_kb_version_mismatch():
+    from app import semantic_cache_store, semantic_cache_lookup
+    with patch('app.redis_client', None):
+        semantic_cache_store('semc-user-4', 'How do I reset my password?', [1.0, 0.0, 0.0],
+                              'Reset via settings.', [], 'model-a', 0)
+        response, sources = semantic_cache_lookup('semc-user-4', [1.0, 0.0, 0.0], 'model-a', 1)
+        assert response is None
+        assert sources is None
+
+
+def test_semantic_cache_miss_on_model_version_mismatch():
+    from app import semantic_cache_store, semantic_cache_lookup
+    with patch('app.redis_client', None):
+        semantic_cache_store('semc-user-5', 'How do I reset my password?', [1.0, 0.0, 0.0],
+                              'Reset via settings.', [], 'model-a', 0)
+        response, sources = semantic_cache_lookup('semc-user-5', [1.0, 0.0, 0.0], 'model-b', 0)
+        assert response is None
+        assert sources is None
+
+
+def test_semantic_cache_isolated_per_user():
+    from app import semantic_cache_store, semantic_cache_lookup
+    with patch('app.redis_client', None):
+        semantic_cache_store('semc-user-6a', 'How do I reset my password?', [1.0, 0.0, 0.0],
+                              'Reset via settings.', [], 'model-a', 0)
+        response, sources = semantic_cache_lookup('semc-user-6b', [1.0, 0.0, 0.0], 'model-a', 0)
+        assert response is None
+        assert sources is None
+
+
 # ---- Sigmoid tests ----
 
 def test_sigmoid_midpoint():
@@ -105,6 +209,98 @@ def test_ask_cached_response_returned_directly():
         mock_gen.assert_not_called()
 
 
+def _fake_embedding_model(vec=(1.0, 0.0, 0.0)):
+    import numpy as np
+    model = MagicMock()
+    model.embed.return_value = [np.array(vec)]
+    return model
+
+
+def test_ask_semantic_cache_hit_skips_llm():
+    """Semantic cache hit (after exact-match miss) returns cached answer, skips LLM."""
+    with patch('app.require_auth', _make_auth_decorator()), \
+         patch('app.supabase_admin', _supabase_chain()), \
+         patch('app.get_cached_response', return_value=(None, None)), \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.get_kb_version', return_value=0), \
+         patch('app.semantic_cache_lookup', return_value=('Semantic answer', [{'source': 'faq.pdf'}])), \
+         patch('app.semantic_cache_store') as mock_store, \
+         patch('app.generate_text') as mock_gen:
+
+        import app as flask_app
+        flask_app.app.config['TESTING'] = True
+        client = flask_app.app.test_client()
+        res = client.post('/ask', data={'question': 'How do I reset my password?'})
+        data = res.get_json()
+
+        assert res.status_code == 200
+        assert data['response'] == 'Semantic answer'
+        assert data['sources'] == [{'source': 'faq.pdf'}]
+        mock_gen.assert_not_called()
+        mock_store.assert_not_called()
+
+
+def test_ask_semantic_cache_miss_stores_new_entry():
+    """Semantic + exact cache miss: LLM runs, then semantic_cache_store is called."""
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Some context')
+    with patch('app.require_auth', _make_auth_decorator()), \
+         patch('app.supabase_admin', _supabase_chain()), \
+         patch('app.get_collection_count', return_value=1), \
+         patch('app.decompose_query', return_value=['test question']), \
+         patch('app.grade_chunks', return_value=([chunk[1]], [])), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.generate_text', return_value='Fresh answer'), \
+         patch('app.get_cached_response', return_value=(None, None)), \
+         patch('app.cache_response'), \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.get_kb_version', return_value=0), \
+         patch('app.semantic_cache_lookup', return_value=(None, None)), \
+         patch('app.semantic_cache_store') as mock_store:
+
+        import app as flask_app
+        flask_app.app.config['TESTING'] = True
+        client = flask_app.app.test_client()
+        res = client.post('/ask', data={'question': 'test question'})
+        data = res.get_json()
+
+        assert res.status_code == 200
+        assert data['response'] == 'Fresh answer'
+        mock_store.assert_called_once()
+        call_args = mock_store.call_args.args
+        assert call_args[0] == 'test-user-id'
+        assert call_args[1] == 'test question'
+        assert call_args[3] == 'Fresh answer'
+
+
+def test_ask_multi_turn_skips_semantic_cache():
+    """Conversation history present: semantic cache is never consulted (single-turn only)."""
+    prior_turns = [{'question': 'What is X?', 'answer': 'X is a thing.'}]
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Some context')
+    with patch('app.require_auth', _make_auth_decorator()), \
+         patch('app.supabase_admin', _supabase_chain(data=prior_turns)), \
+         patch('app.get_collection_count', return_value=1), \
+         patch('app.decompose_query', return_value=['Can you elaborate?']), \
+         patch('app.grade_chunks', return_value=([chunk[1]], [])), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.generate_text', return_value='Follow-up answer'), \
+         patch('app.get_cached_response', return_value=(None, None)), \
+         patch('app.cache_response'), \
+         patch('app.semantic_cache_lookup') as mock_lookup, \
+         patch('app.semantic_cache_store') as mock_store:
+
+        import app as flask_app
+        flask_app.app.config['TESTING'] = True
+        client = flask_app.app.test_client()
+        res = client.post('/ask', data={
+            'question': 'Can you elaborate?',
+            'session_id': 'session-abc-123',
+        })
+
+        assert res.status_code == 200
+        mock_lookup.assert_not_called()
+        mock_store.assert_not_called()
+
+
 def test_ask_missing_question_returns_400():
     """Blank question returns 400."""
     with patch('app.require_auth', _make_auth_decorator()):
@@ -123,6 +319,27 @@ def test_ask_no_auth_returns_401():
     client = flask_app.app.test_client()
     res = client.post('/ask', data={'question': 'hello'})
     assert res.status_code == 401
+
+
+# ---- /upload kb_version invalidation ----
+
+def test_upload_bumps_kb_version():
+    """A successful upload/reindex bumps kb_version so stale semantic-cache entries stop matching."""
+    from io import BytesIO
+    with patch('app.require_auth', _make_auth_decorator()), \
+         patch('app.supabase_admin', _supabase_chain()), \
+         patch('app.index_pdf', return_value=1), \
+         patch('app.rebuild_bm25_for_user'), \
+         patch('app.rebuild_graph_for_user'), \
+         patch('app.bump_kb_version') as mock_bump:
+
+        import app as flask_app
+        flask_app.app.config['TESTING'] = True
+        client = flask_app.app.test_client()
+        res = client.post('/upload', data={'pdf': (BytesIO(b'%PDF-1.4 fake'), 'test.pdf')})
+
+        assert res.status_code == 200
+        mock_bump.assert_called_once_with('test-user-id')
 
 
 def test_ask_multi_turn_passes_history_to_llm():
