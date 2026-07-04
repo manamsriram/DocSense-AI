@@ -672,3 +672,191 @@ def test_extract_page_figures_captionless_skipped_without_budget():
         assert extract_page_figures(page, vision_budget={'remaining': 0}) == []
         mock_vis.assert_not_called()
     doc.close()
+
+
+# ---- Item E: configurable retrieval width ----
+
+def test_estimate_query_complexity_simple_question_gets_base_width():
+    from app import estimate_query_complexity
+    result = estimate_query_complexity('What is the effective date in section 4.2?')
+    assert result == {'top_k': 20, 'top_n': 5, 'synthesis_top_n': 6}
+
+
+def test_estimate_query_complexity_multiple_subqueries_widens_pool():
+    """Sub-query count from decompose_query is weighted over word count (a short but
+    genuinely multi-part question should still widen, per the flagged review risk)."""
+    from app import estimate_query_complexity
+    result = estimate_query_complexity('Compare X and Y', sub_query_count=2)
+    assert result['top_k'] > 20
+    assert result['top_n'] > 5
+
+
+def test_estimate_query_complexity_conjunction_hint_widens_pool_even_at_one_subquery():
+    from app import estimate_query_complexity
+    result = estimate_query_complexity('Compare X and Y', sub_query_count=1)
+    assert result['top_k'] > 20
+
+
+def test_estimate_query_complexity_long_simple_question_stays_base_width():
+    """A long single-fact question shouldn't get a wider pool just for being long —
+    word count alone is a weak signal."""
+    from app import estimate_query_complexity
+    long_simple = ('What is the exact effective date specified in section 4.2 of the '
+                    'amended supplier agreement signed earlier this year')
+    result = estimate_query_complexity(long_simple, sub_query_count=1)
+    assert result == {'top_k': 20, 'top_n': 5, 'synthesis_top_n': 6}
+
+
+# ---- Item A-BM25: incremental indexing ----
+
+def _fake_qdrant_point(point_id, text):
+    point = MagicMock()
+    point.id = point_id
+    point.payload = {'text': text}
+    return point
+
+
+def test_incremental_bm25_update_adds_new_document_chunks():
+    from app import _incremental_update_bm25_for_user, bm25_corpora, bm25_indices
+
+    new_records = [_fake_qdrant_point('id-1', '[Page 1, Source: new.pdf] hello world')]
+    with patch('app.qdrant') as mock_qdrant:
+        mock_qdrant.scroll.return_value = (new_records, None)
+        bm25_corpora.pop('bm25-user-1', None)
+        bm25_indices.pop('bm25-user-1', None)
+        _incremental_update_bm25_for_user('bm25-user-1', 'new.pdf')
+
+    corpus = bm25_corpora['bm25-user-1']
+    assert corpus == [('id-1', '[Page 1, Source: new.pdf] hello world')]
+    assert 'bm25-user-1' in bm25_indices
+
+
+def test_incremental_bm25_update_on_reindex_replaces_stale_entries_not_duplicates():
+    """Re-uploading the same filename must drop the old chunks for that source even
+    when the new document has a different chunk count/ids (the edge case flagged in
+    the plan review) — otherwise BM25 accumulates stale/duplicate entries."""
+    from app import _incremental_update_bm25_for_user, bm25_corpora, bm25_indices
+
+    bm25_corpora['bm25-user-2'] = [
+        ('old-id-1', '[Page 1, Source: doc.pdf] stale first chunk'),
+        ('old-id-2', '[Page 2, Source: doc.pdf] stale second chunk'),
+        ('other-id', '[Page 1, Source: other.pdf] unrelated document'),
+    ]
+    new_records = [_fake_qdrant_point('new-id-1', '[Page 1, Source: doc.pdf] fresh reindexed chunk')]
+    with patch('app.qdrant') as mock_qdrant:
+        mock_qdrant.scroll.return_value = (new_records, None)
+        _incremental_update_bm25_for_user('bm25-user-2', 'doc.pdf')
+
+    corpus = bm25_corpora['bm25-user-2']
+    ids = [cid for cid, _ in corpus]
+    assert 'old-id-1' not in ids
+    assert 'old-id-2' not in ids
+    assert 'other-id' in ids          # unrelated source untouched
+    assert 'new-id-1' in ids
+    assert len(corpus) == 2
+
+    del bm25_corpora['bm25-user-2']
+    bm25_indices.pop('bm25-user-2', None)
+
+
+def test_rebuild_bm25_for_user_falls_back_to_full_rebuild_without_source_filename():
+    """No source_filename (e.g. startup init path) → full rebuild, unchanged behavior."""
+    from app import rebuild_bm25_for_user
+    with patch('app._full_rebuild_bm25_for_user') as mock_full, \
+         patch('app._incremental_update_bm25_for_user') as mock_incremental:
+        rebuild_bm25_for_user('some-user')
+        mock_full.assert_called_once_with('some-user')
+        mock_incremental.assert_not_called()
+
+
+def test_rebuild_bm25_for_user_falls_back_to_full_rebuild_on_incremental_error():
+    from app import rebuild_bm25_for_user
+    with patch('app._incremental_update_bm25_for_user', side_effect=RuntimeError('boom')), \
+         patch('app._full_rebuild_bm25_for_user') as mock_full:
+        rebuild_bm25_for_user('some-user', source_filename='doc.pdf')
+        mock_full.assert_called_once_with('some-user')
+
+
+def test_rebuild_bm25_for_user_forced_full_rebuild_env_flag():
+    """BM25_FORCE_FULL_REBUILD=true is the rollback escape hatch — must bypass
+    the incremental path entirely even when a source_filename is given."""
+    from app import rebuild_bm25_for_user
+    with patch.dict('os.environ', {'BM25_FORCE_FULL_REBUILD': 'true'}), \
+         patch('app._full_rebuild_bm25_for_user') as mock_full, \
+         patch('app._incremental_update_bm25_for_user') as mock_incremental:
+        rebuild_bm25_for_user('some-user', source_filename='doc.pdf')
+        mock_full.assert_called_once_with('some-user')
+        mock_incremental.assert_not_called()
+
+
+# ---- Item D: bounded iterative CRAG loop ----
+
+def test_ask_file_agentic_stops_iterating_once_relevant_chunks_found():
+    from app import ask_file_agentic
+    chunk = (0.9, '[Page 1, Source: doc.pdf] relevant content')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.decompose_query', return_value=['test question']), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
+         patch('app.grade_chunks', return_value=([chunk[1]], [])) as mock_grade, \
+         patch('app.generate_text', return_value='Answer'):
+        response, sources = ask_file_agentic('test question', 'user-1')
+
+    assert response == 'Answer'
+    assert mock_retrieve.call_count == 1   # found relevant on first iteration, no retries
+    assert mock_grade.call_count == 1
+
+
+def test_ask_file_agentic_bounded_by_max_iterations_when_nothing_ever_relevant():
+    """Grading keeps returning zero-relevant — loop must stop at MAX_CRAG_ITERATIONS,
+    not spin forever, and still produce an answer from best-effort chunks."""
+    import app
+    chunk = (0.5, '[Page 1, Source: doc.pdf] never graded relevant')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.decompose_query', return_value=['test question']), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
+         patch('app.grade_chunks', return_value=([], [chunk[1]])), \
+         patch('app.reformulate_query', side_effect=lambda q: q), \
+         patch('app.generate_text', return_value='Answer'):
+        response, sources = app.ask_file_agentic('test question', 'user-1')
+
+    assert mock_retrieve.call_count == app.MAX_CRAG_ITERATIONS
+    # nothing was ever graded relevant, so no chunks reach the synthesis prompt
+    assert sources == []
+    assert response == "I couldn't find relevant information in your documents to answer this question."
+
+
+def test_ask_file_agentic_grading_failure_uses_retrieved_chunks_without_burning_iterations():
+    """GradingUnavailableError (grader itself broken) must stop retrying immediately
+    and use what was retrieved, rather than spending the full iteration budget."""
+    import app
+    from app import GradingUnavailableError
+    chunk = (0.7, '[Page 1, Source: doc.pdf] some content')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.decompose_query', return_value=['test question']), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
+         patch('app.grade_chunks', side_effect=GradingUnavailableError('grader down')), \
+         patch('app.generate_text', return_value='Answer') as mock_gen:
+        response, sources = app.ask_file_agentic('test question', 'user-1')
+
+    assert mock_retrieve.call_count == 1
+    assert response == 'Answer'
+    assert len(sources) == 1
+    mock_gen.assert_called_once()
+
+
+def test_ask_file_agentic_wall_clock_budget_stops_further_iterations():
+    """A slow environment must not blow past the wall-clock budget just because the
+    iteration counter hasn't run out yet."""
+    import app
+    chunk = (0.5, '[Page 1, Source: doc.pdf] slow content')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.decompose_query', return_value=['test question']), \
+         patch('app.CRAG_WALL_CLOCK_BUDGET_S', 0), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
+         patch('app.grade_chunks', return_value=([], [chunk[1]])), \
+         patch('app.reformulate_query', side_effect=lambda q: q), \
+         patch('app.generate_text', return_value='Answer'):
+        app.ask_file_agentic('test question', 'user-1')
+
+    # budget is already exhausted before the first iteration even starts
+    assert mock_retrieve.call_count == 0

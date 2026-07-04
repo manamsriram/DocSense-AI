@@ -191,7 +191,14 @@ def require_auth(f):
 
 # ---- Indexing ----
 
-def rebuild_bm25_for_user(user_id):
+def _bm25_force_full_rebuild():
+    """Escape hatch: set BM25_FORCE_FULL_REBUILD=true to revert to the old full-scan
+    rebuild-on-every-upload behavior if the incremental path misbehaves in production,
+    without needing a redeploy."""
+    return os.getenv('BM25_FORCE_FULL_REBUILD', 'false').lower() == 'true'
+
+
+def _full_rebuild_bm25_for_user(user_id):
     records, _ = qdrant.scroll(
         collection_name=COLLECTION,
         scroll_filter=Filter(must=[FieldCondition(key='user_id', match=MatchValue(value=user_id))]),
@@ -212,6 +219,68 @@ def rebuild_bm25_for_user(user_id):
         bm25_indices[user_id] = BM25Okapi(tokenized)
         bm25_corpora[user_id] = list(zip(ids, texts))
     logging.info(f"BM25 rebuilt for user {user_id[:8]}... with {len(texts)} chunks")
+
+
+def rebuild_bm25_for_user(user_id, source_filename=None):
+    """Update a user's BM25 index after an upload.
+
+    When source_filename is given (the normal /upload case), only that document's
+    chunks are fetched from Qdrant and merged into the existing in-memory corpus —
+    avoids rescanning the user's entire collection on every upload. Falls back to a
+    full rebuild on first load (no source_filename), when explicitly forced via
+    BM25_FORCE_FULL_REBUILD, or if the incremental path errors.
+
+    # ponytail: no transactional guarantee between Qdrant and this in-memory index —
+    # if a process crashes between the Qdrant upsert and this call, they drift apart
+    # with no self-healing. Add periodic rebuild_all_bm25() as a scheduled
+    # reconciliation job if drift becomes an observed problem.
+    """
+    if source_filename and not _bm25_force_full_rebuild():
+        try:
+            _incremental_update_bm25_for_user(user_id, source_filename)
+            return
+        except Exception as e:
+            logging.warning(f"[bm25] incremental update failed for user {user_id[:8]}..., "
+                             f"falling back to full rebuild: {e}")
+    _full_rebuild_bm25_for_user(user_id)
+
+
+def _incremental_update_bm25_for_user(user_id, source_filename):
+    """Fetch only source_filename's chunks and merge into the existing corpus.
+
+    Held under bm25_lock for the entire read-merge-rebuild so a concurrent upload
+    for the same user can't interleave and lose an append.
+    """
+    records, _ = qdrant.scroll(
+        collection_name=COLLECTION,
+        scroll_filter=Filter(must=[
+            FieldCondition(key='user_id', match=MatchValue(value=user_id)),
+            FieldCondition(key='source', match=MatchValue(value=source_filename)),
+        ]),
+        with_payload=True,
+        limit=10000
+    )
+    ids = [str(r.id) for r in records]
+    texts = [r.payload.get('text', '') for r in records]
+
+    # display_text always starts with "[Page N, Source: <filename>]" (see index_pdf) —
+    # use that marker to drop this source's stale entries regardless of whether their
+    # point ids changed across a reindex (e.g. the doc got shorter/longer).
+    source_marker = f", Source: {source_filename}]"
+
+    with bm25_lock:
+        existing = [(cid, text) for cid, text in bm25_corpora.get(user_id, [])
+                    if source_marker not in text]
+        combined = existing + list(zip(ids, texts))
+        if not combined:
+            bm25_indices.pop(user_id, None)
+            bm25_corpora.pop(user_id, None)
+            return
+        tokenized = [t.lower().split() for _, t in combined]
+        bm25_indices[user_id] = BM25Okapi(tokenized)
+        bm25_corpora[user_id] = combined
+    logging.info(f"[bm25] incrementally updated user {user_id[:8]}... "
+                 f"({len(records)} chunks for {source_filename!r}, {len(combined)} total)")
 
 
 def rebuild_all_bm25():
@@ -610,6 +679,19 @@ def get_collection_count(user_id):
         return 0
 
 
+_COMPLEXITY_HINT_RE = re.compile(r'\b(and|versus|vs\.?|compare|between|difference)\b', re.IGNORECASE)
+
+
+def estimate_query_complexity(question, sub_query_count=1):
+    """Heuristic retrieval-width sizing. Weights sub_query_count (a real signal already
+    computed by decompose_query) over word count, which is a weak, easily-fooled proxy —
+    e.g. "compare X and Y" is short but hard, a long single-fact question is easy."""
+    is_complex = sub_query_count > 1 or bool(_COMPLEXITY_HINT_RE.search(question))
+    if is_complex:
+        return {'top_k': 30, 'top_n': 8, 'synthesis_top_n': 8}
+    return {'top_k': 20, 'top_n': 5, 'synthesis_top_n': 6}
+
+
 def reciprocal_rank_fusion(ranked_lists, k=60):
     scores = {}
     for ranked in ranked_lists:
@@ -664,12 +746,12 @@ def _sigmoid(x):
     return 1.0 / (1.0 + math.exp(-x))
 
 
-def find_relevant_chunks(query, user_id, top_n=3):
+def find_relevant_chunks(query, user_id, top_n=3, top_k=20):
     """Return [(score, text), ...] reranked for a specific user."""
     if get_collection_count(user_id) == 0:
         return []
 
-    candidates = hybrid_search(query, user_id, top_k=20)
+    candidates = hybrid_search(query, user_id, top_k=top_k)
     if not candidates:
         return []
 
@@ -854,12 +936,12 @@ def graph_expand_candidates(query, user_id, existing_texts):
     return expanded
 
 
-def find_relevant_chunks_with_graph(query, user_id, top_n=5):
+def find_relevant_chunks_with_graph(query, user_id, top_n=5, top_k=20):
     """Hybrid retrieval + graph expansion, reranked as one pool."""
     if get_collection_count(user_id) == 0:
         return []
 
-    candidates = hybrid_search(query, user_id, top_k=20)
+    candidates = hybrid_search(query, user_id, top_k=top_k)
     if not candidates:
         return []
 
@@ -986,7 +1068,9 @@ def decompose_query(question):
 def grade_chunks(query, chunks):
     """Grade chunks for relevance. Returns (relevant_texts, irrelevant_texts).
 
-    Falls back to treating all chunks as relevant on any failure.
+    Raises GradingUnavailableError if the grading call itself fails, so callers
+    can tell "grader is down" apart from "grader ran and found nothing relevant"
+    instead of silently treating every chunk as relevant either way.
     """
     if not chunks:
         return [], []
@@ -1002,7 +1086,17 @@ def grade_chunks(query, chunks):
         return relevant, irrelevant
     except Exception as e:
         logging.warning(f"Chunk grading failed: {e}")
-        return chunks, []
+        raise GradingUnavailableError(str(e)) from e
+
+
+class GradingUnavailableError(Exception):
+    """Raised when the grading LLM call itself failed — distinct from a genuine
+    zero-relevant verdict. Callers should stop retrying rather than burn iteration
+    budget against a grader that isn't working."""
+
+
+MAX_CRAG_ITERATIONS = int(os.getenv('MAX_CRAG_ITERATIONS', '3'))
+CRAG_WALL_CLOCK_BUDGET_S = float(os.getenv('CRAG_WALL_CLOCK_BUDGET_S', '12'))
 
 
 def reformulate_query(query):
@@ -1081,7 +1175,8 @@ def build_source(score, text):
 
 def ask_file(question, user_id, conversation_history=None):
     """Return (response_text, sources) for a specific user's documents."""
-    scored_chunks = find_relevant_chunks(question, user_id, top_n=3)
+    complexity = estimate_query_complexity(question)
+    scored_chunks = find_relevant_chunks(question, user_id, top_n=complexity['top_n'], top_k=complexity['top_k'])
     if not scored_chunks:
         return "No documents have been indexed yet. Please upload a PDF first.", []
 
@@ -1112,6 +1207,7 @@ def ask_file_agentic(question, user_id, conversation_history=None):
 
         sub_queries = _timed("decompose_query", decompose_query, question)
         logging.info(f"[agentic] decomposed into {len(sub_queries)} sub-queries: {sub_queries}")
+        complexity = estimate_query_complexity(question, sub_query_count=len(sub_queries))
 
         # Anchor retrieval to prior turn so follow-ups ("what about its revenue?")
         # retrieve on full context, not just the bare pronoun.
@@ -1123,18 +1219,33 @@ def ask_file_agentic(question, user_id, conversation_history=None):
 
         for sub_q in sub_queries:
             retrieval_query = f"{prior_q} {sub_q}" if prior_q else sub_q
-            scored = _timed("retrieval", find_relevant_chunks_with_graph, retrieval_query, user_id, top_n=5)
-            if not scored:
-                continue
+            iter_top_k = complexity['top_k']
+            scored, relevant = [], []
 
-            texts = [text for _, text in scored]
-            relevant, _ = _timed("grade_chunks", grade_chunks, sub_q, texts)
+            for iteration in range(MAX_CRAG_ITERATIONS):
+                if time.perf_counter() - t_total > CRAG_WALL_CLOCK_BUDGET_S:
+                    logging.warning(f"[agentic] wall-clock budget exceeded, stopping CRAG loop for '{sub_q}'")
+                    break
 
-            if not relevant:
-                logging.info(f"[agentic] no relevant chunks for '{retrieval_query}', reformulating")
+                scored = _timed(f"retrieval_iter{iteration}", find_relevant_chunks_with_graph,
+                                 retrieval_query, user_id, top_n=complexity['top_n'], top_k=iter_top_k)
+                if not scored:
+                    break
+
+                texts = [text for _, text in scored]
+                try:
+                    relevant, _ = _timed(f"grade_chunks_iter{iteration}", grade_chunks, sub_q, texts)
+                except GradingUnavailableError:
+                    logging.warning(f"[agentic] grading unavailable, using retrieved chunks as-is for '{sub_q}'")
+                    relevant = texts
+                    break
+
+                if relevant:
+                    break
+
+                logging.info(f"[agentic] no relevant chunks for '{retrieval_query}' (iter {iteration}), reformulating")
                 retrieval_query = _timed("reformulate_query", reformulate_query, retrieval_query)
-                scored = _timed("retrieval_retry", find_relevant_chunks_with_graph, retrieval_query, user_id, top_n=5)
-                relevant = [text for _, text in scored]
+                iter_top_k = int(iter_top_k * 1.5)
                 reformulation_count += 1
 
             for score, text in scored:
@@ -1154,7 +1265,7 @@ def ask_file_agentic(question, user_id, conversation_history=None):
             "Include page numbers when citing information. "
             "If the answer is not in the excerpts, say so.\n\n"
         )
-        for score, text in sorted(all_chunks, key=lambda x: x[0], reverse=True)[:6]:
+        for score, text in sorted(all_chunks, key=lambda x: x[0], reverse=True)[:complexity['synthesis_top_n']]:
             source, prompt_text = build_source(score, text)
             prompt += f"{prompt_text}\n\n"
             sources.append(source)
@@ -1391,7 +1502,7 @@ def upload_pdf():
 
         # Index to Qdrant
         count = index_pdf(tmp.name, user_id, force=True, display_name=original_name)
-        rebuild_bm25_for_user(user_id)
+        rebuild_bm25_for_user(user_id, source_filename=original_name)
         rebuild_graph_for_user(user_id)
         bump_kb_version(user_id)
 
