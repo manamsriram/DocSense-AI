@@ -789,6 +789,244 @@ def test_rebuild_bm25_for_user_forced_full_rebuild_env_flag():
         mock_incremental.assert_not_called()
 
 
+# ---- Item A-Graph: incremental in-memory graph patching ----
+
+def _graph_supabase_mock(edges_data=None, nodes_data=None):
+    """MagicMock distinguishing graph_edges vs graph_nodes table queries."""
+    mock = MagicMock()
+
+    def table_side_effect(name):
+        tbl = MagicMock()
+        tbl.select.return_value = tbl
+        tbl.eq.return_value = tbl
+        tbl.execute.return_value = MagicMock(
+            data=(edges_data or []) if name == 'graph_edges' else (nodes_data or [])
+        )
+        return tbl
+
+    mock.table.side_effect = table_side_effect
+    return mock
+
+
+def test_incremental_graph_update_adds_new_edges_and_nodes():
+    from app import _incremental_update_graph_for_user, _graph_store
+    import networkx as nx
+
+    _graph_store['graph-user-1'] = nx.DiGraph()
+    edges = [{'source_entity': 'acme', 'relation': 'employs', 'target_entity': 'alice',
+              'chunk_id': 'c1', 'source_doc': 'new.pdf', 'page_num': 1}]
+    nodes = [{'entity_name': 'acme', 'entity_type': 'org'},
+             {'entity_name': 'alice', 'entity_type': 'person'}]
+    with patch('app.supabase_admin', _graph_supabase_mock(edges, nodes)):
+        _incremental_update_graph_for_user('graph-user-1', 'new.pdf')
+
+    G = _graph_store['graph-user-1']
+    assert G.has_edge('acme', 'alice')
+    assert G['acme']['alice']['source_doc'] == 'new.pdf'
+    assert G.nodes['alice']['entity_type'] == 'person'
+    del _graph_store['graph-user-1']
+
+
+def test_incremental_graph_update_on_reindex_replaces_stale_edges_not_duplicates():
+    """Re-uploading the same filename must drop old edges for that source_doc even
+    if the entities/relations changed, without touching edges from other sources."""
+    from app import _incremental_update_graph_for_user, _graph_store
+    import networkx as nx
+
+    G = nx.DiGraph()
+    G.add_edge('acme', 'bob', relation='employs', chunk_id='old-c1', source_doc='doc.pdf', page_num=1)
+    G.add_edge('acme', 'other-co', relation='partners_with', chunk_id='oc1', source_doc='other.pdf', page_num=1)
+    _graph_store['graph-user-2'] = G
+
+    edges = [{'source_entity': 'acme', 'relation': 'employs', 'target_entity': 'carol',
+              'chunk_id': 'new-c1', 'source_doc': 'doc.pdf', 'page_num': 1}]
+    nodes = [{'entity_name': 'acme', 'entity_type': 'org'}, {'entity_name': 'carol', 'entity_type': 'person'}]
+    with patch('app.supabase_admin', _graph_supabase_mock(edges, nodes)):
+        _incremental_update_graph_for_user('graph-user-2', 'doc.pdf')
+
+    G = _graph_store['graph-user-2']
+    assert not G.has_edge('acme', 'bob')          # stale edge for this source removed
+    assert G.has_edge('acme', 'carol')            # fresh edge added
+    assert G.has_edge('acme', 'other-co')         # unrelated source untouched
+    del _graph_store['graph-user-2']
+
+
+def test_incremental_graph_update_skips_when_graph_not_cached():
+    """If the user's graph isn't in memory yet, do nothing — the next lazy
+    get_graph_for_user() load will already reflect the latest Supabase state."""
+    from app import _incremental_update_graph_for_user, _graph_store
+
+    _graph_store.pop('graph-user-3', None)
+    with patch('app.supabase_admin') as mock_supabase:
+        _incremental_update_graph_for_user('graph-user-3', 'doc.pdf')
+        mock_supabase.table.assert_not_called()
+    assert 'graph-user-3' not in _graph_store
+
+
+def test_rebuild_graph_for_user_falls_back_to_full_rebuild_without_source_filename():
+    """No source_filename → full evict+reload, unchanged behavior."""
+    from app import rebuild_graph_for_user, _graph_store
+
+    _graph_store['some-graph-user'] = MagicMock()
+    with patch('app._incremental_update_graph_for_user') as mock_incremental, \
+         patch('app.get_graph_for_user') as mock_get:
+        rebuild_graph_for_user('some-graph-user')
+        mock_incremental.assert_not_called()
+        mock_get.assert_called_once_with('some-graph-user')
+    assert 'some-graph-user' not in _graph_store
+
+
+def test_rebuild_graph_for_user_falls_back_to_full_rebuild_on_incremental_error():
+    from app import rebuild_graph_for_user
+
+    with patch('app._incremental_update_graph_for_user', side_effect=RuntimeError('boom')), \
+         patch('app.get_graph_for_user') as mock_get:
+        rebuild_graph_for_user('some-graph-user', source_filename='doc.pdf')
+        mock_get.assert_called_once_with('some-graph-user')
+
+
+def test_rebuild_graph_for_user_forced_full_rebuild_env_flag():
+    """GRAPH_FORCE_FULL_REBUILD=true is the rollback escape hatch — must bypass
+    the incremental path entirely even when a source_filename is given."""
+    from app import rebuild_graph_for_user
+
+    with patch.dict('os.environ', {'GRAPH_FORCE_FULL_REBUILD': 'true'}), \
+         patch('app._incremental_update_graph_for_user') as mock_incremental, \
+         patch('app.get_graph_for_user') as mock_get:
+        rebuild_graph_for_user('some-graph-user', source_filename='doc.pdf')
+        mock_incremental.assert_not_called()
+        mock_get.assert_called_once_with('some-graph-user')
+
+
+# ---- Item C: alias-based entity linking ----
+
+def test_build_graph_from_supabase_loads_aliases_onto_nodes():
+    from app import _build_graph_from_supabase
+
+    nodes = [{'entity_name': 'microsoft', 'entity_type': 'org', 'aliases': ['msft']}]
+    edges = []
+    with patch('app.supabase_admin', _graph_supabase_mock_nodes_edges(nodes, edges)):
+        G = _build_graph_from_supabase('alias-user-1')
+
+    assert G.nodes['microsoft']['aliases'] == ['msft']
+
+
+def _graph_supabase_mock_nodes_edges(nodes_data, edges_data):
+    mock = MagicMock()
+
+    def table_side_effect(name):
+        tbl = MagicMock()
+        tbl.select.return_value = tbl
+        tbl.eq.return_value = tbl
+        tbl.execute.return_value = MagicMock(
+            data=nodes_data if name == 'graph_nodes' else edges_data
+        )
+        return tbl
+
+    mock.table.side_effect = table_side_effect
+    return mock
+
+
+def test_graph_expand_candidates_matches_via_alias_when_no_substring_match():
+    """'MSFT' should hit the 'microsoft' node via its alias even though 'microsoft'
+    never appears in the query text — pure substring match would miss this."""
+    from app import graph_expand_candidates
+    import networkx as nx
+
+    G = nx.DiGraph()
+    G.add_node('microsoft', entity_type='org', aliases=['msft'])
+    G.add_node('azure', entity_type='product', aliases=[])
+    G.add_edge('microsoft', 'azure', relation='owns', chunk_id='c1', source_doc='doc.pdf', page_num=1)
+
+    hit = MagicMock()
+    hit.payload = {'text': '[Page 1, Source: doc.pdf] Azure is a cloud platform.'}
+    with patch('app.get_graph_for_user', return_value=G), \
+         patch('app.qdrant') as mock_qdrant:
+        mock_qdrant.retrieve.return_value = [hit]
+        expanded = graph_expand_candidates('What does MSFT own?', 'alias-user-2', existing_texts=set())
+
+    assert len(expanded) == 1
+    assert 'Azure' in expanded[0][1]
+
+
+def test_extract_and_store_graph_merges_new_aliases_with_existing():
+    """Re-extraction for an entity must union new aliases with previously stored
+    ones, not overwrite them — otherwise a reindex silently drops known aliases."""
+    from app import extract_and_store_graph
+    import json as json_module
+
+    llm_response = json_module.dumps([{
+        'chunk_index': 0,
+        'entities': [{'name': 'microsoft', 'type': 'org', 'aliases': ['MSFT']}],
+        'triples': [],
+    }])
+    existing_nodes = [{'entity_name': 'microsoft', 'entity_type': 'org', 'aliases': ['ms']}]
+
+    mock_supabase = _graph_supabase_mock_nodes_edges(existing_nodes, [])
+    upserted = {}
+
+    def capture_upsert(rows, on_conflict=None):
+        upserted['rows'] = rows
+        result = MagicMock()
+        result.execute.return_value = MagicMock(data=[])
+        return result
+
+    mock_supabase.table.side_effect = (
+        lambda name: MagicMock(
+            select=MagicMock(return_value=MagicMock(
+                eq=MagicMock(return_value=MagicMock(
+                    execute=MagicMock(return_value=MagicMock(data=existing_nodes))
+                ))
+            )),
+            upsert=capture_upsert,
+        ) if name == 'graph_nodes' else MagicMock(
+            insert=MagicMock(return_value=MagicMock(execute=MagicMock(return_value=MagicMock(data=[]))))
+        )
+    )
+
+    with patch('app.supabase_admin', mock_supabase), \
+         patch('app._call_groq_helper', return_value=llm_response):
+        extract_and_store_graph([('c1', 1, 'Microsoft owns Azure.')], 'alias-user-3', 'doc.pdf')
+
+    aliases = upserted['rows'][0]['aliases']
+    assert set(aliases) == {'ms', 'msft'}
+
+
+# ---- Item F: Qdrant scale instrumentation ----
+
+def test_get_total_collection_count_returns_qdrant_count():
+    from app import get_total_collection_count
+    with patch('app.qdrant') as mock_qdrant:
+        mock_qdrant.count.return_value = MagicMock(count=42)
+        assert get_total_collection_count() == 42
+
+
+def test_get_total_collection_count_returns_zero_on_qdrant_error():
+    from app import get_total_collection_count
+    with patch('app.qdrant') as mock_qdrant:
+        mock_qdrant.count.side_effect = RuntimeError('down')
+        assert get_total_collection_count() == 0
+
+
+def test_check_qdrant_shard_threshold_warns_when_over_threshold():
+    from app import check_qdrant_shard_threshold
+    with patch('app.get_total_collection_count', return_value=1_500_000), \
+         patch.dict('os.environ', {'QDRANT_SHARD_ALERT_THRESHOLD': '1000000'}), \
+         patch('app.logging.warning') as mock_warn:
+        check_qdrant_shard_threshold()
+        mock_warn.assert_called_once()
+        assert '1500000' in mock_warn.call_args[0][0] or '1,500,000' in mock_warn.call_args[0][0]
+
+
+def test_check_qdrant_shard_threshold_silent_when_under_threshold():
+    from app import check_qdrant_shard_threshold
+    with patch('app.get_total_collection_count', return_value=100), \
+         patch.dict('os.environ', {'QDRANT_SHARD_ALERT_THRESHOLD': '1000000'}), \
+         patch('app.logging.warning') as mock_warn:
+        check_qdrant_shard_threshold()
+        mock_warn.assert_not_called()
+
+
 # ---- Item D: bounded iterative CRAG loop ----
 
 def test_ask_file_agentic_stops_iterating_once_relevant_chunks_found():

@@ -679,6 +679,29 @@ def get_collection_count(user_id):
         return 0
 
 
+def get_total_collection_count():
+    """Total point count across all users — the signal for Pass 2 item F
+    (Qdrant sharding). Not scoped by user_id, unlike get_collection_count."""
+    try:
+        return qdrant.count(collection_name=COLLECTION).count
+    except Exception:
+        return 0
+
+
+def check_qdrant_shard_threshold():
+    """Instrumentation-only, no migration: log a warning once the collection
+    approaches a size where a single Qdrant collection may need sharding.
+    Threshold is env-overridable; see backlog item F for the decision this
+    should trigger (not built until the threshold is actually approached)."""
+    threshold = int(os.getenv('QDRANT_SHARD_ALERT_THRESHOLD', '1000000'))
+    count = get_total_collection_count()
+    if count >= threshold:
+        logging.warning(
+            f"[qdrant] collection size {count} has reached the shard alert "
+            f"threshold ({threshold}) — see backlog item F for sharding strategy"
+        )
+
+
 _COMPLEXITY_HINT_RE = re.compile(r'\b(and|versus|vs\.?|compare|between|difference)\b', re.IGNORECASE)
 
 
@@ -796,12 +819,14 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
             name = ent.get('name', '').strip().lower()
             if not name:
                 continue
+            aliases = {a.strip().lower() for a in ent.get('aliases', []) if a and a.strip()}
             if name not in nodes_to_upsert:
                 nodes_to_upsert[name] = {
-                    'user_id': user_id,
-                    'entity_name': name,
                     'entity_type': ent.get('type'),
+                    'aliases': aliases,
                 }
+            else:
+                nodes_to_upsert[name]['aliases'] |= aliases
 
         for triple in item.get('triples', []):
             subj = triple.get('subject', '').strip().lower()
@@ -821,9 +846,27 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
 
     if nodes_to_upsert:
         try:
+            existing_res = supabase_admin.table('graph_nodes')\
+                .select('entity_name,aliases').eq('user_id', user_id).execute()
+            existing_aliases = {
+                n['entity_name']: set(n.get('aliases') or []) for n in (existing_res.data or [])
+            }
+        except Exception as e:
+            logging.warning(f"[graph] existing-alias lookup failed, upserting without merge: {e}")
+            existing_aliases = {}
+
+        rows = [
+            {
+                'user_id': user_id,
+                'entity_name': name,
+                'entity_type': node['entity_type'],
+                'aliases': sorted(node['aliases'] | existing_aliases.get(name, set())),
+            }
+            for name, node in nodes_to_upsert.items()
+        ]
+        try:
             supabase_admin.table('graph_nodes').upsert(
-                list(nodes_to_upsert.values()),
-                on_conflict='user_id,entity_name'
+                rows, on_conflict='user_id,entity_name'
             ).execute()
         except Exception as e:
             logging.warning(f"[graph] node upsert failed: {e}")
@@ -838,7 +881,7 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
 def _build_graph_from_supabase(user_id):
     try:
         nodes_res = supabase_admin.table('graph_nodes')\
-            .select('entity_name,entity_type')\
+            .select('entity_name,entity_type,aliases')\
             .eq('user_id', user_id).execute()
         edges_res = supabase_admin.table('graph_edges')\
             .select('source_entity,relation,target_entity,chunk_id,source_doc,page_num')\
@@ -849,7 +892,8 @@ def _build_graph_from_supabase(user_id):
 
     G = nx.DiGraph()
     for node in (nodes_res.data or []):
-        G.add_node(node['entity_name'], entity_type=node.get('entity_type'))
+        G.add_node(node['entity_name'], entity_type=node.get('entity_type'),
+                   aliases=node.get('aliases') or [])
     for edge in (edges_res.data or []):
         G.add_edge(
             edge['source_entity'], edge['target_entity'],
@@ -876,11 +920,78 @@ def get_graph_for_user(user_id):
         return _graph_store[user_id]
 
 
-def rebuild_graph_for_user(user_id):
+def _graph_force_full_rebuild():
+    """Escape hatch mirroring BM25_FORCE_FULL_REBUILD: set GRAPH_FORCE_FULL_REBUILD=true
+    to revert to the old evict+reload-from-Supabase behavior if the incremental
+    patch path misbehaves in production, without needing a redeploy."""
+    return os.getenv('GRAPH_FORCE_FULL_REBUILD', 'false').lower() == 'true'
+
+
+def rebuild_graph_for_user(user_id, source_filename=None):
+    """Refresh a user's in-memory graph after an upload.
+
+    When source_filename is given (the normal /upload case), patch the live
+    nx.DiGraph in place — sweep-remove edges belonging to that source_doc, then
+    add the freshly (re-)extracted edges/nodes already committed to Supabase by
+    extract_and_store_graph — instead of evicting and reloading the whole graph.
+    Falls back to the old full evict+reload on error, when explicitly forced via
+    GRAPH_FORCE_FULL_REBUILD, or when no source_filename is given.
+    """
+    if source_filename and not _graph_force_full_rebuild():
+        try:
+            _incremental_update_graph_for_user(user_id, source_filename)
+            return
+        except Exception as e:
+            logging.warning(f"[graph] incremental update failed for user {user_id[:8]}..., "
+                             f"falling back to full rebuild: {e}")
     with _graph_lock:
         _graph_store.pop(user_id, None)
     get_graph_for_user(user_id)
     logging.info(f"[graph] cache refreshed for user {user_id[:8]}...")
+
+
+def _incremental_update_graph_for_user(user_id, source_filename):
+    """Patch the cached graph with source_filename's current edges/nodes.
+
+    Held under _graph_lock for the entire remove-then-add so concurrent mutation
+    isn't interleaved (NetworkX mutation across multiple add_edge calls isn't atomic).
+    Does nothing if the user's graph isn't cached yet — the next lazy
+    get_graph_for_user() call will build it fresh from Supabase, which already
+    reflects this upload since extract_and_store_graph committed it first.
+    """
+    with _graph_lock:
+        if user_id not in _graph_store:
+            return
+
+    edges_res = supabase_admin.table('graph_edges')\
+        .select('source_entity,relation,target_entity,chunk_id,source_doc,page_num')\
+        .eq('user_id', user_id).eq('source_doc', source_filename).execute()
+    nodes_res = supabase_admin.table('graph_nodes')\
+        .select('entity_name,entity_type,aliases')\
+        .eq('user_id', user_id).execute()
+    edges = edges_res.data or []
+    nodes = nodes_res.data or []
+
+    with _graph_lock:
+        G = _graph_store.get(user_id)
+        if G is None:
+            return
+        stale_edges = [(u, v) for u, v, data in G.edges(data=True)
+                       if data.get('source_doc') == source_filename]
+        G.remove_edges_from(stale_edges)
+        for node in nodes:
+            G.add_node(node['entity_name'], entity_type=node.get('entity_type'),
+                       aliases=node.get('aliases') or [])
+        for edge in edges:
+            G.add_edge(
+                edge['source_entity'], edge['target_entity'],
+                relation=edge['relation'],
+                chunk_id=edge['chunk_id'],
+                source_doc=edge['source_doc'],
+                page_num=edge.get('page_num'),
+            )
+    logging.info(f"[graph] incrementally updated user {user_id[:8]}... "
+                 f"({len(edges)} edges for {source_filename!r})")
 
 
 def graph_expand_candidates(query, user_id, existing_texts):
@@ -894,7 +1005,11 @@ def graph_expand_candidates(query, user_id, existing_texts):
         return []
 
     query_lower = query.lower()
-    matched_nodes = [node for node in G.nodes() if node in query_lower]
+    matched_nodes = [
+        node for node, data in G.nodes(data=True)
+        if node in query_lower
+        or any(alias and alias.lower() in query_lower for alias in (data.get('aliases') or []))
+    ]
     if not matched_nodes:
         return []
 
@@ -1005,10 +1120,12 @@ _GRAPH_EXTRACT_PROMPT = (
     'measured_by, approved_by, responsible_for, defines, mentioned_with\n\n'
     'Rules:\n'
     '- Normalize entity names to canonical lowercase\n'
+    '- If an entity has alternate names/abbreviations in the text (e.g. "MSFT" for '
+    '"Microsoft"), list them lowercase under "aliases" (omit if none)\n'
     '- Max 5 entities and 8 triples per chunk\n'
     '- Only include triples where both subject and object are in your entities list\n'
     '- Return ONLY a JSON array, one object per chunk, in input order\n\n'
-    'Format: [{{"chunk_index":0,"entities":[{{"name":"...","type":"..."}}],'
+    'Format: [{{"chunk_index":0,"entities":[{{"name":"...","type":"...","aliases":["..."]}}],'
     '"triples":[{{"subject":"...","relation":"...","object":"..."}}]}}, ...]\n\n'
     'Chunks:\n{chunks}'
 )
@@ -1503,8 +1620,9 @@ def upload_pdf():
         # Index to Qdrant
         count = index_pdf(tmp.name, user_id, force=True, display_name=original_name)
         rebuild_bm25_for_user(user_id, source_filename=original_name)
-        rebuild_graph_for_user(user_id)
+        rebuild_graph_for_user(user_id, source_filename=original_name)
         bump_kb_version(user_id)
+        check_qdrant_shard_threshold()
 
         # Upsert documents record in Supabase
         supabase_admin.table('documents').delete().eq('user_id', user_id).eq('filename', filename).execute()
