@@ -56,14 +56,16 @@ def test_cosine_similarity_opposite_vectors_is_negative_one():
 
 def test_get_kb_version_defaults_to_zero_for_new_user():
     from app import get_kb_version
-    with patch('app.redis_client', None):
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid):
         assert get_kb_version('kbv-user-fresh-1') == 0
 
 
 def test_bump_kb_version_increments_and_persists_in_process():
     from app import get_kb_version, bump_kb_version
     user_id = 'kbv-user-bump-1'
-    with patch('app.redis_client', None):
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid):
         assert get_kb_version(user_id) == 0
         new_version = bump_kb_version(user_id)
         assert new_version == 1
@@ -73,17 +75,29 @@ def test_bump_kb_version_increments_and_persists_in_process():
 
 def test_bump_kb_version_writes_to_redis_when_available():
     from app import bump_kb_version
-    with patch('app.redis_client') as mock_redis:
+    with patch('app.redis_client') as mock_redis, \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid):
         mock_redis.get.return_value = None
         bump_kb_version('kbv-user-redis-2')
         mock_redis.set.assert_called_once_with('kbversion:kbv-user-redis-2', 1)
+
+
+def test_bump_kb_version_shared_org_wide():
+    """Any org member's upload bumps the version every other member sees —
+    org_id, not the raw user_id, is the actual version key."""
+    from app import get_kb_version, bump_kb_version
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', return_value='kbv-shared-org'):
+        bump_kb_version('member-a')
+        assert get_kb_version('member-b') == 1
 
 
 # ---- Semantic cache: store/lookup ----
 
 def test_semantic_cache_lookup_miss_when_empty():
     from app import semantic_cache_lookup
-    with patch('app.redis_client', None):
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid):
         response, sources = semantic_cache_lookup('semc-user-1', [1.0, 0.0, 0.0], 'model-a', 0)
         assert response is None
         assert sources is None
@@ -91,7 +105,8 @@ def test_semantic_cache_lookup_miss_when_empty():
 
 def test_semantic_cache_hit_for_similar_vector():
     from app import semantic_cache_store, semantic_cache_lookup
-    with patch('app.redis_client', None):
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid):
         semantic_cache_store('semc-user-2', 'How do I reset my password?', [1.0, 0.0, 0.0],
                               'Reset via settings.', [{'source': 'faq.pdf'}], 'model-a', 0)
         response, sources = semantic_cache_lookup('semc-user-2', [0.99, 0.01, 0.0], 'model-a', 0)
@@ -101,7 +116,8 @@ def test_semantic_cache_hit_for_similar_vector():
 
 def test_semantic_cache_miss_below_threshold():
     from app import semantic_cache_store, semantic_cache_lookup
-    with patch('app.redis_client', None):
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid):
         semantic_cache_store('semc-user-3', 'How do I reset my password?', [1.0, 0.0, 0.0],
                               'Reset via settings.', [], 'model-a', 0)
         response, sources = semantic_cache_lookup('semc-user-3', [0.0, 1.0, 0.0], 'model-a', 0)
@@ -111,7 +127,8 @@ def test_semantic_cache_miss_below_threshold():
 
 def test_semantic_cache_miss_on_kb_version_mismatch():
     from app import semantic_cache_store, semantic_cache_lookup
-    with patch('app.redis_client', None):
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid):
         semantic_cache_store('semc-user-4', 'How do I reset my password?', [1.0, 0.0, 0.0],
                               'Reset via settings.', [], 'model-a', 0)
         response, sources = semantic_cache_lookup('semc-user-4', [1.0, 0.0, 0.0], 'model-a', 1)
@@ -121,7 +138,8 @@ def test_semantic_cache_miss_on_kb_version_mismatch():
 
 def test_semantic_cache_miss_on_model_version_mismatch():
     from app import semantic_cache_store, semantic_cache_lookup
-    with patch('app.redis_client', None):
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid):
         semantic_cache_store('semc-user-5', 'How do I reset my password?', [1.0, 0.0, 0.0],
                               'Reset via settings.', [], 'model-a', 0)
         response, sources = semantic_cache_lookup('semc-user-5', [1.0, 0.0, 0.0], 'model-b', 0)
@@ -131,12 +149,26 @@ def test_semantic_cache_miss_on_model_version_mismatch():
 
 def test_semantic_cache_isolated_per_user():
     from app import semantic_cache_store, semantic_cache_lookup
-    with patch('app.redis_client', None):
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid):
         semantic_cache_store('semc-user-6a', 'How do I reset my password?', [1.0, 0.0, 0.0],
                               'Reset via settings.', [], 'model-a', 0)
         response, sources = semantic_cache_lookup('semc-user-6b', [1.0, 0.0, 0.0], 'model-a', 0)
         assert response is None
         assert sources is None
+
+
+def test_semantic_cache_shared_within_org():
+    """Two different users in the same org share cached answers — the whole point
+    of org-scoping this layer per the Pass 3 product decision."""
+    from app import semantic_cache_store, semantic_cache_lookup
+    with patch('app.redis_client', None), \
+         patch('app.get_or_create_org_for_user', return_value='semc-shared-org'):
+        semantic_cache_store('semc-member-a', 'How do I reset my password?', [1.0, 0.0, 0.0],
+                              'Reset via settings.', [{'source': 'faq.pdf'}], 'model-a', 0)
+        response, sources = semantic_cache_lookup('semc-member-b', [0.99, 0.01, 0.0], 'model-a', 0)
+        assert response == 'Reset via settings.'
+        assert sources == [{'source': 'faq.pdf'}]
 
 
 # ---- Sigmoid tests ----
@@ -168,6 +200,7 @@ def test_ask_returns_response_and_sources():
     ]
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain()), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid), \
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.grade_chunks', return_value=([c[1] for c in chunks], [])), \
@@ -194,6 +227,7 @@ def test_ask_cached_response_returned_directly():
     """Cache hit returns cached answer without calling LLM."""
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain()), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid), \
          patch('app.get_cached_response', return_value=('Cached answer', [])), \
          patch('app.generate_text') as mock_gen:
 
@@ -220,6 +254,7 @@ def test_ask_semantic_cache_hit_skips_llm():
     """Semantic cache hit (after exact-match miss) returns cached answer, skips LLM."""
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain()), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid), \
          patch('app.get_cached_response', return_value=(None, None)), \
          patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
          patch('app.get_kb_version', return_value=0), \
@@ -245,6 +280,7 @@ def test_ask_semantic_cache_miss_stores_new_entry():
     chunk = (0.9, '[Page 1, Source: doc.pdf] Some context')
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain()), \
+         patch('app.get_or_create_org_for_user', side_effect=lambda uid: uid), \
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.grade_chunks', return_value=([chunk[1]], [])), \
@@ -762,7 +798,8 @@ def test_incremental_bm25_update_on_reindex_replaces_stale_entries_not_duplicate
 def test_rebuild_bm25_for_user_falls_back_to_full_rebuild_without_source_filename():
     """No source_filename (e.g. startup init path) → full rebuild, unchanged behavior."""
     from app import rebuild_bm25_for_user
-    with patch('app._full_rebuild_bm25_for_user') as mock_full, \
+    with patch('app.get_or_create_org_for_user', return_value='some-user'), \
+         patch('app._full_rebuild_bm25_for_user') as mock_full, \
          patch('app._incremental_update_bm25_for_user') as mock_incremental:
         rebuild_bm25_for_user('some-user')
         mock_full.assert_called_once_with('some-user')
@@ -771,7 +808,8 @@ def test_rebuild_bm25_for_user_falls_back_to_full_rebuild_without_source_filenam
 
 def test_rebuild_bm25_for_user_falls_back_to_full_rebuild_on_incremental_error():
     from app import rebuild_bm25_for_user
-    with patch('app._incremental_update_bm25_for_user', side_effect=RuntimeError('boom')), \
+    with patch('app.get_or_create_org_for_user', return_value='some-user'), \
+         patch('app._incremental_update_bm25_for_user', side_effect=RuntimeError('boom')), \
          patch('app._full_rebuild_bm25_for_user') as mock_full:
         rebuild_bm25_for_user('some-user', source_filename='doc.pdf')
         mock_full.assert_called_once_with('some-user')
@@ -782,6 +820,7 @@ def test_rebuild_bm25_for_user_forced_full_rebuild_env_flag():
     the incremental path entirely even when a source_filename is given."""
     from app import rebuild_bm25_for_user
     with patch.dict('os.environ', {'BM25_FORCE_FULL_REBUILD': 'true'}), \
+         patch('app.get_or_create_org_for_user', return_value='some-user'), \
          patch('app._full_rebuild_bm25_for_user') as mock_full, \
          patch('app._incremental_update_bm25_for_user') as mock_incremental:
         rebuild_bm25_for_user('some-user', source_filename='doc.pdf')
@@ -789,19 +828,65 @@ def test_rebuild_bm25_for_user_forced_full_rebuild_env_flag():
         mock_incremental.assert_not_called()
 
 
+def test_rebuild_bm25_for_user_resolves_org_and_dispatches_incremental_by_org_id():
+    """The org, not the raw user_id, is the key passed to the incremental patcher —
+    org-sharing means any member's upload merges into the shared org BM25 corpus."""
+    from app import rebuild_bm25_for_user
+    with patch('app.get_or_create_org_for_user', return_value='org-bm25-1') as mock_org, \
+         patch('app._incremental_update_bm25_for_user') as mock_incremental:
+        rebuild_bm25_for_user('some-user', source_filename='doc.pdf')
+        mock_org.assert_called_once_with('some-user')
+        mock_incremental.assert_called_once_with('org-bm25-1', 'doc.pdf')
+
+
+def test_full_rebuild_bm25_filters_qdrant_by_org_id():
+    from app import _full_rebuild_bm25_for_user
+    with patch('app.qdrant') as mock_qdrant:
+        mock_qdrant.scroll.return_value = ([], None)
+        _full_rebuild_bm25_for_user('org-bm25-filter')
+
+    scroll_filter = mock_qdrant.scroll.call_args.kwargs['scroll_filter']
+    assert scroll_filter.must[0].key == 'org_id'
+    assert scroll_filter.must[0].match.value == 'org-bm25-filter'
+
+
+def test_incremental_bm25_update_filters_qdrant_by_org_id():
+    from app import _incremental_update_bm25_for_user, bm25_corpora, bm25_indices
+    bm25_corpora.pop('org-bm25-filter-2', None)
+    with patch('app.qdrant') as mock_qdrant:
+        mock_qdrant.scroll.return_value = ([], None)
+        _incremental_update_bm25_for_user('org-bm25-filter-2', 'doc.pdf')
+
+    scroll_filter = mock_qdrant.scroll.call_args.kwargs['scroll_filter']
+    keys = {cond.key for cond in scroll_filter.must}
+    assert keys == {'org_id', 'source'}
+    org_cond = next(c for c in scroll_filter.must if c.key == 'org_id')
+    assert org_cond.match.value == 'org-bm25-filter-2'
+    bm25_indices.pop('org-bm25-filter-2', None)
+
+
 # ---- Item A-Graph: incremental in-memory graph patching ----
 
 def _graph_supabase_mock(edges_data=None, nodes_data=None):
-    """MagicMock distinguishing graph_edges vs graph_nodes table queries."""
+    """MagicMock distinguishing graph_edges vs graph_nodes table queries.
+
+    Returns the same tbl mock for repeat calls with the same table name, so
+    a test can call mock.table('graph_nodes') afterwards to inspect the
+    .eq(...) calls the code under test actually made.
+    """
     mock = MagicMock()
+    tbls = {}
 
     def table_side_effect(name):
+        if name in tbls:
+            return tbls[name]
         tbl = MagicMock()
         tbl.select.return_value = tbl
         tbl.eq.return_value = tbl
         tbl.execute.return_value = MagicMock(
             data=(edges_data or []) if name == 'graph_edges' else (nodes_data or [])
         )
+        tbls[name] = tbl
         return tbl
 
     mock.table.side_effect = table_side_effect
@@ -867,19 +952,21 @@ def test_rebuild_graph_for_user_falls_back_to_full_rebuild_without_source_filena
     """No source_filename → full evict+reload, unchanged behavior."""
     from app import rebuild_graph_for_user, _graph_store
 
-    _graph_store['some-graph-user'] = MagicMock()
-    with patch('app._incremental_update_graph_for_user') as mock_incremental, \
+    _graph_store['some-graph-org'] = MagicMock()
+    with patch('app.get_or_create_org_for_user', return_value='some-graph-org'), \
+         patch('app._incremental_update_graph_for_user') as mock_incremental, \
          patch('app.get_graph_for_user') as mock_get:
         rebuild_graph_for_user('some-graph-user')
         mock_incremental.assert_not_called()
         mock_get.assert_called_once_with('some-graph-user')
-    assert 'some-graph-user' not in _graph_store
+    assert 'some-graph-org' not in _graph_store
 
 
 def test_rebuild_graph_for_user_falls_back_to_full_rebuild_on_incremental_error():
     from app import rebuild_graph_for_user
 
-    with patch('app._incremental_update_graph_for_user', side_effect=RuntimeError('boom')), \
+    with patch('app.get_or_create_org_for_user', return_value='some-graph-org'), \
+         patch('app._incremental_update_graph_for_user', side_effect=RuntimeError('boom')), \
          patch('app.get_graph_for_user') as mock_get:
         rebuild_graph_for_user('some-graph-user', source_filename='doc.pdf')
         mock_get.assert_called_once_with('some-graph-user')
@@ -891,11 +978,115 @@ def test_rebuild_graph_for_user_forced_full_rebuild_env_flag():
     from app import rebuild_graph_for_user
 
     with patch.dict('os.environ', {'GRAPH_FORCE_FULL_REBUILD': 'true'}), \
+         patch('app.get_or_create_org_for_user', return_value='some-graph-org'), \
          patch('app._incremental_update_graph_for_user') as mock_incremental, \
          patch('app.get_graph_for_user') as mock_get:
         rebuild_graph_for_user('some-graph-user', source_filename='doc.pdf')
         mock_incremental.assert_not_called()
         mock_get.assert_called_once_with('some-graph-user')
+
+
+def test_rebuild_graph_for_user_resolves_org_and_dispatches_incremental_by_org_id():
+    """The org, not the raw user_id, is the key passed to the incremental patcher —
+    org-sharing means any member's upload patches the shared org graph."""
+    from app import rebuild_graph_for_user
+
+    with patch('app.get_or_create_org_for_user', return_value='org-dispatch-1') as mock_org, \
+         patch('app._incremental_update_graph_for_user') as mock_incremental:
+        rebuild_graph_for_user('some-graph-user', source_filename='doc.pdf')
+        mock_org.assert_called_once_with('some-graph-user')
+        mock_incremental.assert_called_once_with('org-dispatch-1', 'doc.pdf')
+
+
+def test_get_graph_for_user_resolves_org_and_caches_by_org_id():
+    from app import get_graph_for_user, _graph_store
+
+    _graph_store.pop('org-lookup-1', None)
+    sentinel_graph = object()
+    with patch('app.get_or_create_org_for_user', return_value='org-lookup-1'), \
+         patch('app._build_graph_from_supabase', return_value=sentinel_graph) as mock_build:
+        result = get_graph_for_user('some-user')
+
+    assert result is sentinel_graph
+    assert _graph_store['org-lookup-1'] is sentinel_graph
+    mock_build.assert_called_once_with('org-lookup-1')
+    del _graph_store['org-lookup-1']
+
+
+def test_build_graph_from_supabase_filters_by_org_id():
+    from app import _build_graph_from_supabase
+
+    mock = _graph_supabase_mock([], [])
+    with patch('app.supabase_admin', mock):
+        _build_graph_from_supabase('org-filter-1')
+
+    nodes_tbl = mock.table('graph_nodes')
+    assert ('org_id', 'org-filter-1') in [c.args for c in nodes_tbl.eq.call_args_list]
+
+
+def test_incremental_update_graph_filters_by_org_id():
+    from app import _incremental_update_graph_for_user, _graph_store
+    import networkx as nx
+
+    _graph_store['org-filter-2'] = nx.DiGraph()
+    mock = _graph_supabase_mock([], [])
+    with patch('app.supabase_admin', mock):
+        _incremental_update_graph_for_user('org-filter-2', 'doc.pdf')
+
+    edges_tbl = mock.table('graph_edges')
+    assert ('org_id', 'org-filter-2') in [c.args for c in edges_tbl.eq.call_args_list]
+    del _graph_store['org-filter-2']
+
+
+def test_extract_and_store_graph_writes_org_id_and_upserts_org_scoped():
+    """Nodes/edges get both user_id (provenance) and org_id (query key); the
+    upsert conflict target is org-scoped so org members share one entity set."""
+    from app import extract_and_store_graph
+    import json as json_module
+
+    llm_response = json_module.dumps([{
+        'chunk_index': 0,
+        'entities': [{'name': 'acme', 'type': 'org', 'aliases': []}],
+        'triples': [{'subject': 'acme', 'relation': 'employs', 'object': 'bob'}],
+    }])
+    mock_supabase = _graph_supabase_mock_nodes_edges([], [])
+    upserted = {}
+    inserted_edges = {}
+
+    def capture_upsert(rows, on_conflict=None):
+        upserted['rows'] = rows
+        upserted['on_conflict'] = on_conflict
+        result = MagicMock()
+        result.execute.return_value = MagicMock(data=[])
+        return result
+
+    def capture_insert(rows):
+        inserted_edges['rows'] = rows
+        result = MagicMock()
+        result.execute.return_value = MagicMock(data=[])
+        return result
+
+    mock_supabase.table.side_effect = (
+        lambda name: MagicMock(
+            select=MagicMock(return_value=MagicMock(
+                eq=MagicMock(return_value=MagicMock(
+                    execute=MagicMock(return_value=MagicMock(data=[]))
+                ))
+            )),
+            upsert=capture_upsert,
+        ) if name == 'graph_nodes' else MagicMock(insert=capture_insert)
+    )
+
+    with patch('app.supabase_admin', mock_supabase), \
+         patch('app.get_or_create_org_for_user', return_value='org-extract-1'), \
+         patch('app._call_groq_helper', return_value=llm_response):
+        extract_and_store_graph([('c1', 1, 'Acme employs Bob.')], 'user-extract-1', 'doc.pdf')
+
+    assert upserted['on_conflict'] == 'org_id,entity_name'
+    assert upserted['rows'][0]['org_id'] == 'org-extract-1'
+    assert upserted['rows'][0]['user_id'] == 'user-extract-1'
+    assert inserted_edges['rows'][0]['org_id'] == 'org-extract-1'
+    assert inserted_edges['rows'][0]['user_id'] == 'user-extract-1'
 
 
 # ---- Item C: alias-based entity linking ----
@@ -1098,3 +1289,331 @@ def test_ask_file_agentic_wall_clock_budget_stops_further_iterations():
 
     # budget is already exhausted before the first iteration even starts
     assert mock_retrieve.call_count == 0
+
+
+# ---- Pass 3, item B: org-level graph tier ----
+
+def _org_supabase_mock(org_members_data=None, orgs_insert_data=None, member_inserts=None):
+    """MagicMock distinguishing org_members select vs orgs/org_members insert.
+
+    member_inserts, if given a list, is appended to with each payload passed
+    to org_members.insert(...), since MagicMock's mock_calls don't reliably
+    name calls made through a table() side_effect the same way each time.
+    """
+    mock = MagicMock()
+
+    def table_side_effect(name):
+        tbl = MagicMock()
+        if name == 'org_members':
+            tbl.select.return_value = tbl
+            tbl.eq.return_value = tbl
+            tbl.execute.return_value = MagicMock(data=org_members_data or [])
+
+            def do_insert(payload):
+                if member_inserts is not None:
+                    member_inserts.append(payload)
+                result = MagicMock()
+                result.execute.return_value = MagicMock(data=[])
+                return result
+            tbl.insert.side_effect = do_insert
+        elif name == 'orgs':
+            insert_result = MagicMock()
+            insert_result.execute.return_value = MagicMock(data=orgs_insert_data or [])
+            tbl.insert.return_value = insert_result
+        return tbl
+
+    mock.table.side_effect = table_side_effect
+    return mock
+
+
+def test_get_or_create_org_for_user_returns_existing_membership():
+    from app import get_or_create_org_for_user, _org_id_store
+
+    _org_id_store.pop('org-existing-user', None)
+    mock = _org_supabase_mock(org_members_data=[{'org_id': 'org-abc'}])
+    with patch('app.supabase_admin', mock):
+        org_id = get_or_create_org_for_user('org-existing-user')
+
+    assert org_id == 'org-abc'
+    mock.table.assert_any_call('org_members')
+    assert not any(c.args == ('orgs',) for c in mock.table.call_args_list)
+
+
+def test_get_or_create_org_for_user_creates_org_and_membership_when_none_exists():
+    from app import get_or_create_org_for_user, _org_id_store
+
+    _org_id_store.pop('org-new-user', None)
+    member_inserts = []
+    mock = _org_supabase_mock(org_members_data=[], orgs_insert_data=[{'id': 'org-new-1'}],
+                               member_inserts=member_inserts)
+    with patch('app.supabase_admin', mock):
+        org_id = get_or_create_org_for_user('org-new-user')
+
+    assert org_id == 'org-new-1'
+    assert member_inserts == [{'org_id': 'org-new-1', 'user_id': 'org-new-user', 'role': 'admin'}]
+
+
+def test_get_or_create_org_for_user_caches_after_first_lookup():
+    from app import get_or_create_org_for_user, _org_id_store
+
+    _org_id_store.pop('org-cached-user', None)
+    mock = _org_supabase_mock(org_members_data=[{'org_id': 'org-cached'}])
+    with patch('app.supabase_admin', mock):
+        first = get_or_create_org_for_user('org-cached-user')
+        mock.table.reset_mock()
+        second = get_or_create_org_for_user('org-cached-user')
+
+    assert first == second == 'org-cached'
+    mock.table.assert_not_called()
+
+
+# ---- Pass 3, item B: join/approve flow ----
+
+def _join_flow_supabase_mock(request_row, admin_check_data, old_membership_data):
+    """MagicMock routing org_join_requests / org_members / graph_* table calls
+    to independently-scriptable per-table mocks, keyed off which builder method
+    is called first (select vs insert vs update vs delete)."""
+    mock = MagicMock()
+    calls = {'org_members_deletes': [], 'org_members_inserts': [],
+             'org_join_requests_updates': []}
+
+    def org_join_requests_table():
+        tbl = MagicMock()
+        tbl.select.return_value = tbl
+        tbl.eq.return_value = tbl
+        tbl.execute.return_value = MagicMock(data=[request_row] if request_row else [])
+
+        def do_update(payload):
+            calls['org_join_requests_updates'].append(payload)
+            r = MagicMock()
+            r.eq.return_value = r
+            r.execute.return_value = MagicMock(data=[])
+            return r
+        tbl.update.side_effect = do_update
+        return tbl
+
+    member_select_queue = [admin_check_data, old_membership_data]
+
+    def org_members_table():
+        tbl = MagicMock()
+        tbl.select.return_value = tbl
+        tbl.eq.return_value = tbl
+
+        def do_execute():
+            data = member_select_queue.pop(0) if member_select_queue else []
+            return MagicMock(data=data)
+        tbl.execute.side_effect = do_execute
+
+        def do_delete():
+            d = MagicMock()
+
+            def eq_capture(col, val):
+                calls['org_members_deletes'].append((col, val))
+                return d
+            d.eq.side_effect = eq_capture
+            d.execute.return_value = MagicMock(data=[])
+            return d
+        tbl.delete.side_effect = do_delete
+
+        def do_insert(payload):
+            calls['org_members_inserts'].append(payload)
+            r = MagicMock()
+            r.execute.return_value = MagicMock(data=[])
+            return r
+        tbl.insert.side_effect = do_insert
+        return tbl
+
+    def table_side_effect(name):
+        if name == 'org_join_requests':
+            return org_join_requests_table()
+        if name == 'org_members':
+            return org_members_table()
+        return MagicMock()
+
+    mock.table.side_effect = table_side_effect
+    mock._calls = calls
+    return mock
+
+
+def test_request_join_org_inserts_pending_request():
+    from app import request_join_org
+
+    mock = MagicMock()
+    insert_result = MagicMock()
+    insert_result.execute.return_value = MagicMock(data=[{'id': 42}])
+    mock.table.return_value.insert.return_value = insert_result
+
+    with patch('app.supabase_admin', mock):
+        request_join_org('joining-user', 'target-org')
+
+    mock.table.assert_any_call('org_join_requests')
+    mock.table.return_value.insert.assert_called_once_with({
+        'org_id': 'target-org', 'user_id': 'joining-user', 'status': 'pending',
+    })
+
+
+def test_approve_join_request_rejects_non_admin():
+    from app import approve_join_request
+
+    request_row = {'id': 1, 'org_id': 'org-target', 'user_id': 'joining-user', 'status': 'pending'}
+    mock = _join_flow_supabase_mock(request_row, admin_check_data=[], old_membership_data=[])
+
+    with patch('app.supabase_admin', mock):
+        with pytest.raises(PermissionError):
+            approve_join_request(1, 'not-an-admin')
+
+    assert mock._calls['org_members_inserts'] == []
+    assert mock._calls['org_members_deletes'] == []
+
+
+def test_approve_join_request_swaps_membership_and_migrates_graph():
+    from app import approve_join_request, _org_id_store
+
+    _org_id_store['joining-user'] = 'org-old'
+    request_row = {'id': 2, 'org_id': 'org-target', 'user_id': 'joining-user', 'status': 'pending'}
+    mock = _join_flow_supabase_mock(
+        request_row,
+        admin_check_data=[{'user_id': 'admin-1'}],
+        old_membership_data=[{'org_id': 'org-old'}],
+    )
+
+    with patch('app.supabase_admin', mock), \
+         patch('app._migrate_org_graph_data') as mock_migrate, \
+         patch('app._migrate_org_qdrant_payloads') as mock_migrate_qdrant:
+        result = approve_join_request(2, 'admin-1')
+
+    assert result == 'org-target'
+    assert mock._calls['org_members_deletes'] == [('user_id', 'joining-user')]
+    assert mock._calls['org_members_inserts'] == [
+        {'org_id': 'org-target', 'user_id': 'joining-user', 'role': 'member'}
+    ]
+    assert mock._calls['org_join_requests_updates'][0]['status'] == 'approved'
+    assert mock._calls['org_join_requests_updates'][0]['decided_by'] == 'admin-1'
+    mock_migrate.assert_called_once_with('org-old', 'org-target')
+    mock_migrate_qdrant.assert_called_once_with('org-old', 'org-target')
+    assert _org_id_store['joining-user'] == 'org-target'
+    del _org_id_store['joining-user']
+
+
+# ---- Pass 3, item B: Qdrant org-scoping + migration ----
+
+def test_migrate_org_qdrant_payloads_reassigns_and_evicts_bm25_cache():
+    from app import _migrate_org_qdrant_payloads, bm25_indices, bm25_corpora
+
+    bm25_indices['org-qm-old'] = MagicMock()
+    bm25_corpora['org-qm-old'] = [('id', 'text')]
+    bm25_indices['org-qm-new'] = MagicMock()
+    bm25_corpora['org-qm-new'] = [('id2', 'text2')]
+
+    with patch('app.qdrant') as mock_qdrant:
+        _migrate_org_qdrant_payloads('org-qm-old', 'org-qm-new')
+
+    _, kwargs = mock_qdrant.set_payload.call_args
+    assert kwargs['payload'] == {'org_id': 'org-qm-new'}
+    selector_filter = kwargs['points_selector']
+    assert selector_filter.must[0].key == 'org_id'
+    assert selector_filter.must[0].match.value == 'org-qm-old'
+    assert 'org-qm-old' not in bm25_indices
+    assert 'org-qm-old' not in bm25_corpora
+    assert 'org-qm-new' not in bm25_indices
+    assert 'org-qm-new' not in bm25_corpora
+
+
+def test_backfill_qdrant_org_ids_sets_org_id_for_legacy_points():
+    from app import backfill_qdrant_org_ids, COLLECTION
+
+    legacy_point = MagicMock()
+    legacy_point.id = 'legacy-1'
+    legacy_point.payload = {'user_id': 'legacy-user', 'text': 'hi'}
+    already_migrated = MagicMock()
+    already_migrated.id = 'new-1'
+    already_migrated.payload = {'user_id': 'other-user', 'org_id': 'org-existing', 'text': 'hi'}
+
+    with patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_or_create_org_for_user', return_value='org-backfilled'):
+        mock_qdrant.scroll.return_value = ([legacy_point, already_migrated], None)
+        updated = backfill_qdrant_org_ids()
+
+    assert updated == 1
+    mock_qdrant.set_payload.assert_called_once_with(
+        collection_name=COLLECTION,
+        payload={'org_id': 'org-backfilled'},
+        points=['legacy-1'],
+    )
+
+
+# ---- Pass 3, item B: mandatory security regression tests (plan step 7) ----
+
+def test_security_default_solo_org_never_sees_another_orgs_data_across_all_four_layers():
+    """Two users in separate (default, solo) orgs must never see each other's data
+    through the graph, BM25/Qdrant retrieval, semantic cache, or kb_version — the
+    default-case regression this org tier must never break."""
+    import networkx as nx
+    from app import (
+        get_graph_for_user, hybrid_search, semantic_cache_store, semantic_cache_lookup,
+        bump_kb_version, get_kb_version, bm25_indices, bm25_corpora, _graph_store,
+    )
+
+    org_of = {'user-a': 'sec-org-a', 'user-b': 'sec-org-b'}
+
+    # --- graph: org-a's cached graph must not leak into org-b's lookup ---
+    secret_graph = nx.DiGraph()
+    secret_graph.add_node('acme-secret-entity')
+    _graph_store['sec-org-a'] = secret_graph
+    with patch('app.get_or_create_org_for_user', side_effect=lambda uid: org_of[uid]), \
+         patch('app._build_graph_from_supabase', return_value=nx.DiGraph()) as mock_build:
+        graph_b = get_graph_for_user('user-b')
+    assert 'acme-secret-entity' not in graph_b
+    mock_build.assert_called_once_with('sec-org-b')
+    del _graph_store['sec-org-a']
+
+    # --- BM25/Qdrant: org-a's indexed secret text must not surface for org-b ---
+    bm25_indices['sec-org-a'] = MagicMock()
+    bm25_corpora['sec-org-a'] = [('id-a', '[Page 1, Source: s.pdf] org-a secret text')]
+    with patch('app.get_or_create_org_for_user', side_effect=lambda uid: org_of[uid]), \
+         patch('app.get_collection_count', return_value=0):
+        results_b = hybrid_search('anything', 'user-b')
+    assert results_b == []  # count==0 short-circuits before any org-a data could leak
+    bm25_indices.pop('sec-org-a', None)
+    bm25_corpora.pop('sec-org-a', None)
+
+    # --- semantic cache: org-a's cached answer must not be returned for org-b ---
+    with patch('app.get_or_create_org_for_user', side_effect=lambda uid: org_of[uid]), \
+         patch('app.redis_client', None):
+        semantic_cache_store('user-a', 'shared question text', [1.0, 0.0, 0.0],
+                              'org-a secret answer', [], 'model-a', 0)
+        response, sources = semantic_cache_lookup('user-b', [1.0, 0.0, 0.0], 'model-a', 0)
+    assert response is None
+    assert sources is None
+
+    # --- kb_version: org-a bumping its version must not affect org-b's ---
+    with patch('app.get_or_create_org_for_user', side_effect=lambda uid: org_of[uid]), \
+         patch('app.redis_client', None):
+        bump_kb_version('user-a')
+        assert get_kb_version('user-b') == 0
+
+
+def test_security_pending_join_request_grants_no_visibility_until_approved():
+    """Filing a join request must not touch org_members or change org resolution —
+    a naive 'any matching org_id row' implementation would leak the target org's
+    data to a merely-pending requester."""
+    from app import request_join_org, get_or_create_org_for_user, _org_id_store
+
+    _org_id_store['pending-user'] = 'sec-org-original'
+    mock_supabase = MagicMock()
+    insert_result = MagicMock()
+    insert_result.execute.return_value = MagicMock(data=[{'id': 99}])
+    mock_supabase.table.return_value.insert.return_value = insert_result
+
+    with patch('app.supabase_admin', mock_supabase):
+        request_join_org('pending-user', 'sec-org-target')
+
+    # org_join_requests is the only table touched — org_members (and therefore
+    # this user's resolved org) is untouched by filing a request
+    tables_touched = {c.args[0] for c in mock_supabase.table.call_args_list}
+    assert tables_touched == {'org_join_requests'}
+
+    # org resolution for the requester is still the original org — cache untouched,
+    # and even a fresh lookup would still hit org_members unmodified
+    assert get_or_create_org_for_user('pending-user') == 'sec-org-original'
+    del _org_id_store['pending-user']

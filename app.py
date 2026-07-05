@@ -18,6 +18,7 @@ import numpy as np
 import logging
 import threading
 import uuid
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from groq import Groq
 from google import genai
@@ -146,6 +147,10 @@ _bm25_ready = False
 _graph_store = {}
 _graph_lock = threading.Lock()
 
+# Org tier — user_id -> org_id, lazy-resolved/created via org_members
+_org_id_store = {}
+_org_id_lock = threading.Lock()
+
 
 # ---- Perf helpers ----
 
@@ -198,17 +203,17 @@ def _bm25_force_full_rebuild():
     return os.getenv('BM25_FORCE_FULL_REBUILD', 'false').lower() == 'true'
 
 
-def _full_rebuild_bm25_for_user(user_id):
+def _full_rebuild_bm25_for_user(org_id):
     records, _ = qdrant.scroll(
         collection_name=COLLECTION,
-        scroll_filter=Filter(must=[FieldCondition(key='user_id', match=MatchValue(value=user_id))]),
+        scroll_filter=Filter(must=[FieldCondition(key='org_id', match=MatchValue(value=org_id))]),
         with_payload=True,
         limit=10000
     )
     if not records:
         with bm25_lock:
-            bm25_indices.pop(user_id, None)
-            bm25_corpora.pop(user_id, None)
+            bm25_indices.pop(org_id, None)
+            bm25_corpora.pop(org_id, None)
         return
 
     texts = [r.payload.get('text', '') for r in records]
@@ -216,17 +221,17 @@ def _full_rebuild_bm25_for_user(user_id):
     tokenized = [t.lower().split() for t in texts]
 
     with bm25_lock:
-        bm25_indices[user_id] = BM25Okapi(tokenized)
-        bm25_corpora[user_id] = list(zip(ids, texts))
-    logging.info(f"BM25 rebuilt for user {user_id[:8]}... with {len(texts)} chunks")
+        bm25_indices[org_id] = BM25Okapi(tokenized)
+        bm25_corpora[org_id] = list(zip(ids, texts))
+    logging.info(f"BM25 rebuilt for org {org_id} with {len(texts)} chunks")
 
 
 def rebuild_bm25_for_user(user_id, source_filename=None):
-    """Update a user's BM25 index after an upload.
+    """Update a user's org-shared BM25 index after an upload.
 
     When source_filename is given (the normal /upload case), only that document's
     chunks are fetched from Qdrant and merged into the existing in-memory corpus —
-    avoids rescanning the user's entire collection on every upload. Falls back to a
+    avoids rescanning the org's entire collection on every upload. Falls back to a
     full rebuild on first load (no source_filename), when explicitly forced via
     BM25_FORCE_FULL_REBUILD, or if the incremental path errors.
 
@@ -235,26 +240,27 @@ def rebuild_bm25_for_user(user_id, source_filename=None):
     # with no self-healing. Add periodic rebuild_all_bm25() as a scheduled
     # reconciliation job if drift becomes an observed problem.
     """
+    org_id = get_or_create_org_for_user(user_id)
     if source_filename and not _bm25_force_full_rebuild():
         try:
-            _incremental_update_bm25_for_user(user_id, source_filename)
+            _incremental_update_bm25_for_user(org_id, source_filename)
             return
         except Exception as e:
-            logging.warning(f"[bm25] incremental update failed for user {user_id[:8]}..., "
+            logging.warning(f"[bm25] incremental update failed for org {org_id}, "
                              f"falling back to full rebuild: {e}")
-    _full_rebuild_bm25_for_user(user_id)
+    _full_rebuild_bm25_for_user(org_id)
 
 
-def _incremental_update_bm25_for_user(user_id, source_filename):
-    """Fetch only source_filename's chunks and merge into the existing corpus.
+def _incremental_update_bm25_for_user(org_id, source_filename):
+    """Fetch only source_filename's chunks and merge into the existing org corpus.
 
     Held under bm25_lock for the entire read-merge-rebuild so a concurrent upload
-    for the same user can't interleave and lose an append.
+    within the same org can't interleave and lose an append.
     """
     records, _ = qdrant.scroll(
         collection_name=COLLECTION,
         scroll_filter=Filter(must=[
-            FieldCondition(key='user_id', match=MatchValue(value=user_id)),
+            FieldCondition(key='org_id', match=MatchValue(value=org_id)),
             FieldCondition(key='source', match=MatchValue(value=source_filename)),
         ]),
         with_payload=True,
@@ -269,22 +275,22 @@ def _incremental_update_bm25_for_user(user_id, source_filename):
     source_marker = f", Source: {source_filename}]"
 
     with bm25_lock:
-        existing = [(cid, text) for cid, text in bm25_corpora.get(user_id, [])
+        existing = [(cid, text) for cid, text in bm25_corpora.get(org_id, [])
                     if source_marker not in text]
         combined = existing + list(zip(ids, texts))
         if not combined:
-            bm25_indices.pop(user_id, None)
-            bm25_corpora.pop(user_id, None)
+            bm25_indices.pop(org_id, None)
+            bm25_corpora.pop(org_id, None)
             return
         tokenized = [t.lower().split() for _, t in combined]
-        bm25_indices[user_id] = BM25Okapi(tokenized)
-        bm25_corpora[user_id] = combined
-    logging.info(f"[bm25] incrementally updated user {user_id[:8]}... "
+        bm25_indices[org_id] = BM25Okapi(tokenized)
+        bm25_corpora[org_id] = combined
+    logging.info(f"[bm25] incrementally updated org {org_id} "
                  f"({len(records)} chunks for {source_filename!r}, {len(combined)} total)")
 
 
 def rebuild_all_bm25():
-    """Scroll all Qdrant records and rebuild per-user BM25 indices."""
+    """Scroll all Qdrant records and rebuild per-org BM25 indices."""
     all_records = []
     offset = None
     while True:
@@ -295,24 +301,24 @@ def rebuild_all_bm25():
         if offset is None:
             break
 
-    user_chunks = {}
+    org_chunks = {}
     for r in all_records:
-        uid = r.payload.get('user_id')
-        if uid:
-            user_chunks.setdefault(uid, []).append(r)
+        org_id = r.payload.get('org_id')
+        if org_id:
+            org_chunks.setdefault(org_id, []).append(r)
 
     with bm25_lock:
         bm25_indices.clear()
         bm25_corpora.clear()
 
-    for uid, records in user_chunks.items():
+    for org_id, records in org_chunks.items():
         texts = [r.payload.get('text', '') for r in records]
         ids = [str(r.id) for r in records]
         tokenized = [t.lower().split() for t in texts]
         with bm25_lock:
-            bm25_indices[uid] = BM25Okapi(tokenized)
-            bm25_corpora[uid] = list(zip(ids, texts))
-    logging.info(f"BM25 rebuilt for {len(user_chunks)} user(s)")
+            bm25_indices[org_id] = BM25Okapi(tokenized)
+            bm25_corpora[org_id] = list(zip(ids, texts))
+    logging.info(f"BM25 rebuilt for {len(org_chunks)} org(s)")
 
 
 def preprocess(text):
@@ -521,7 +527,13 @@ def _upload_figure(path, png_bytes):
 
 
 def index_pdf(pdf_path, user_id, force=False, display_name=None):
-    """Extract, chunk, embed, and upsert a PDF into Qdrant for a specific user."""
+    """Extract, chunk, embed, and upsert a PDF into Qdrant for a specific user.
+
+    Payload carries both user_id (provenance/ownership — this user's own
+    dedup/force-reindex checks below stay scoped to it) and org_id (the
+    retrieval-scoping key shared across org members).
+    """
+    org_id = get_or_create_org_for_user(user_id)
     filename = display_name or os.path.basename(pdf_path)
 
     if force:
@@ -629,7 +641,8 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
             PointStruct(
                 id=point_id,
                 vector=vec.tolist(),
-                payload={'source': filename, 'page': page_num, 'text': display_text, 'user_id': user_id, **extra}
+                payload={'source': filename, 'page': page_num, 'text': display_text,
+                         'user_id': user_id, 'org_id': org_id, **extra}
             )
             for (point_id, page_num, display_text, extra), vec in zip(points, vecs)
         ]
@@ -669,10 +682,11 @@ def init_index():
 # ---- Retrieval ----
 
 def get_collection_count(user_id):
+    org_id = get_or_create_org_for_user(user_id)
     try:
         result = qdrant.count(
             collection_name=COLLECTION,
-            count_filter=Filter(must=[FieldCondition(key='user_id', match=MatchValue(value=user_id))])
+            count_filter=Filter(must=[FieldCondition(key='org_id', match=MatchValue(value=org_id))])
         )
         return result.count
     except Exception:
@@ -724,27 +738,29 @@ def reciprocal_rank_fusion(ranked_lists, k=60):
 
 
 def hybrid_search(query, user_id, top_k=20):
-    """Combine dense (Qdrant) and sparse (BM25) retrieval via RRF for a single user."""
+    """Combine dense (Qdrant) and sparse (BM25) retrieval via RRF, org-scoped
+    so every member of a user's org shares the same retrieval corpus."""
+    org_id = get_or_create_org_for_user(user_id)
     count = get_collection_count(user_id)
     if count == 0:
         return []
 
-    # Dense retrieval via Qdrant, filtered to this user
+    # Dense retrieval via Qdrant, filtered to this org
     query_vec = list(get_embedding_model().embed([query]))[0].tolist()
     hits = qdrant.search(
         collection_name=COLLECTION,
         query_vector=query_vec,
-        query_filter=Filter(must=[FieldCondition(key='user_id', match=MatchValue(value=user_id))]),
+        query_filter=Filter(must=[FieldCondition(key='org_id', match=MatchValue(value=org_id))]),
         limit=min(top_k, count),
         with_payload=True
     )
     dense_ids = [str(h.id) for h in hits]
     dense_doc_map = {str(h.id): h.payload.get('text', '') for h in hits}
 
-    # Sparse retrieval via per-user BM25
+    # Sparse retrieval via the org-shared BM25 index
     with bm25_lock:
-        local_bm25 = bm25_indices.get(user_id)
-        local_corpus = list(bm25_corpora.get(user_id, []))
+        local_bm25 = bm25_indices.get(org_id)
+        local_corpus = list(bm25_corpora.get(org_id, []))
 
     sparse_ids = []
     if local_bm25 and local_corpus:
@@ -791,7 +807,10 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
 
     batch_chunks: list of (chunk_id, page_num, text)
     Failures are logged and silently skipped — must never block document indexing.
+    Rows are org-scoped (org_id is the query/uniqueness key, shared across org
+    members) while user_id is kept for provenance/ownership only.
     """
+    org_id = get_or_create_org_for_user(user_id)
     formatted = '\n\n'.join(
         f'[{i}] {text[:600]}' for i, (_, _, text) in enumerate(batch_chunks)
     )
@@ -836,6 +855,7 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
                 continue
             edges_to_insert.append({
                 'user_id': user_id,
+                'org_id': org_id,
                 'source_entity': subj,
                 'relation': rel,
                 'target_entity': obj,
@@ -847,7 +867,7 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
     if nodes_to_upsert:
         try:
             existing_res = supabase_admin.table('graph_nodes')\
-                .select('entity_name,aliases').eq('user_id', user_id).execute()
+                .select('entity_name,aliases').eq('org_id', org_id).execute()
             existing_aliases = {
                 n['entity_name']: set(n.get('aliases') or []) for n in (existing_res.data or [])
             }
@@ -858,6 +878,7 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
         rows = [
             {
                 'user_id': user_id,
+                'org_id': org_id,
                 'entity_name': name,
                 'entity_type': node['entity_type'],
                 'aliases': sorted(node['aliases'] | existing_aliases.get(name, set())),
@@ -866,7 +887,7 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
         ]
         try:
             supabase_admin.table('graph_nodes').upsert(
-                rows, on_conflict='user_id,entity_name'
+                rows, on_conflict='org_id,entity_name'
             ).execute()
         except Exception as e:
             logging.warning(f"[graph] node upsert failed: {e}")
@@ -878,16 +899,16 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
             logging.warning(f"[graph] edge insert failed: {e}")
 
 
-def _build_graph_from_supabase(user_id):
+def _build_graph_from_supabase(org_id):
     try:
         nodes_res = supabase_admin.table('graph_nodes')\
             .select('entity_name,entity_type,aliases')\
-            .eq('user_id', user_id).execute()
+            .eq('org_id', org_id).execute()
         edges_res = supabase_admin.table('graph_edges')\
             .select('source_entity,relation,target_entity,chunk_id,source_doc,page_num')\
-            .eq('user_id', user_id).execute()
+            .eq('org_id', org_id).execute()
     except Exception as e:
-        logging.warning(f"[graph] failed to load graph for user {user_id[:8]}...: {e}")
+        logging.warning(f"[graph] failed to load graph for org {org_id}: {e}")
         return nx.DiGraph()
 
     G = nx.DiGraph()
@@ -904,20 +925,194 @@ def _build_graph_from_supabase(user_id):
         )
     logging.info(
         f"[graph] loaded {G.number_of_nodes()} nodes, {G.number_of_edges()} "
-        f"edges for user {user_id[:8]}..."
+        f"edges for org {org_id}"
     )
     return G
 
 
 def get_graph_for_user(user_id):
+    org_id = get_or_create_org_for_user(user_id)
     with _graph_lock:
-        if user_id in _graph_store:
-            return _graph_store[user_id]
-    G = _build_graph_from_supabase(user_id)
+        if org_id in _graph_store:
+            return _graph_store[org_id]
+    G = _build_graph_from_supabase(org_id)
     with _graph_lock:
-        if user_id not in _graph_store:
-            _graph_store[user_id] = G
-        return _graph_store[user_id]
+        if org_id not in _graph_store:
+            _graph_store[org_id] = G
+        return _graph_store[org_id]
+
+
+def get_or_create_org_for_user(user_id):
+    """Resolve a user's current org, creating a solo org on first call.
+
+    Single choke point every org-scoped layer (graph, BM25, Qdrant, semantic
+    cache) reads through — every user is a member of exactly one org (1:1),
+    defaulting to a solo org they administer.
+    """
+    with _org_id_lock:
+        if user_id in _org_id_store:
+            return _org_id_store[user_id]
+
+    membership = supabase_admin.table('org_members')\
+        .select('org_id').eq('user_id', user_id).execute()
+    rows = membership.data or []
+    if rows:
+        org_id = rows[0]['org_id']
+    else:
+        org_res = supabase_admin.table('orgs').insert({'name': None}).execute()
+        org_id = org_res.data[0]['id']
+        supabase_admin.table('org_members').insert({
+            'org_id': org_id, 'user_id': user_id, 'role': 'admin',
+        }).execute()
+
+    with _org_id_lock:
+        _org_id_store[user_id] = org_id
+        return _org_id_store[user_id]
+
+
+def request_join_org(user_id, org_id):
+    """File a pending request for user_id to join org_id.
+
+    Does not touch the user's current membership — that only changes on
+    approve_join_request, so a pending request never leaks visibility into
+    the target org.
+    """
+    supabase_admin.table('org_join_requests').insert({
+        'org_id': org_id, 'user_id': user_id, 'status': 'pending',
+    }).execute()
+
+
+def approve_join_request(request_id, approving_admin_id):
+    """Approve a pending join request: swap membership and migrate the user's
+    data from their old (solo) org into the target org.
+
+    Raises PermissionError if approving_admin_id isn't an admin of the
+    request's target org.
+    """
+    req_res = supabase_admin.table('org_join_requests')\
+        .select('*').eq('id', request_id).execute()
+    req = req_res.data[0]
+    target_org_id = req['org_id']
+    joining_user_id = req['user_id']
+
+    admin_check = supabase_admin.table('org_members').select('user_id')\
+        .eq('org_id', target_org_id).eq('user_id', approving_admin_id)\
+        .eq('role', 'admin').execute()
+    if not admin_check.data:
+        raise PermissionError(
+            f"{approving_admin_id} is not an admin of org {target_org_id}"
+        )
+
+    old_membership = supabase_admin.table('org_members').select('org_id')\
+        .eq('user_id', joining_user_id).execute()
+    old_org_id = old_membership.data[0]['org_id'] if old_membership.data else None
+
+    supabase_admin.table('org_members').delete().eq('user_id', joining_user_id).execute()
+    supabase_admin.table('org_members').insert({
+        'org_id': target_org_id, 'user_id': joining_user_id, 'role': 'member',
+    }).execute()
+    supabase_admin.table('org_join_requests').update({
+        'status': 'approved', 'decided_by': approving_admin_id,
+        'decided_at': datetime.now(timezone.utc).isoformat(),
+    }).eq('id', request_id).execute()
+
+    with _org_id_lock:
+        _org_id_store[joining_user_id] = target_org_id
+
+    if old_org_id and old_org_id != target_org_id:
+        _migrate_org_graph_data(old_org_id, target_org_id)
+        _migrate_org_qdrant_payloads(old_org_id, target_org_id)
+
+    return target_org_id
+
+
+def _migrate_org_graph_data(old_org_id, new_org_id):
+    """Reassign all graph rows from old_org_id to new_org_id.
+
+    old_org_id is always the joining user's prior solo org (1:1 membership),
+    so every row under it belongs solely to that user — safe to move in full
+    rather than filtering by user_id. Node aliases are merged (org-scoped
+    uniqueness on entity_name), edges are reassigned outright since they
+    carry no such constraint.
+    """
+    nodes_res = supabase_admin.table('graph_nodes')\
+        .select('entity_name,entity_type,aliases').eq('org_id', old_org_id).execute()
+    target_res = supabase_admin.table('graph_nodes')\
+        .select('entity_name,aliases').eq('org_id', new_org_id).execute()
+    existing_aliases = {
+        n['entity_name']: set(n.get('aliases') or []) for n in (target_res.data or [])
+    }
+    rows = [
+        {
+            'org_id': new_org_id,
+            'entity_name': n['entity_name'],
+            'entity_type': n.get('entity_type'),
+            'aliases': sorted(set(n.get('aliases') or []) | existing_aliases.get(n['entity_name'], set())),
+        }
+        for n in (nodes_res.data or [])
+    ]
+    if rows:
+        supabase_admin.table('graph_nodes').upsert(rows, on_conflict='org_id,entity_name').execute()
+        supabase_admin.table('graph_nodes').delete().eq('org_id', old_org_id).execute()
+    supabase_admin.table('graph_edges').update({'org_id': new_org_id}).eq('org_id', old_org_id).execute()
+
+    with _graph_lock:
+        _graph_store.pop(old_org_id, None)
+        _graph_store.pop(new_org_id, None)
+
+
+def _migrate_org_qdrant_payloads(old_org_id, new_org_id):
+    """Repoint every Qdrant point tagged with old_org_id to new_org_id.
+
+    old_org_id is always the joining user's prior solo org, so every point
+    under it belongs solely to that user. BM25's cached indices for both
+    orgs are evicted so the next lazy rebuild reflects the merged corpus.
+    """
+    qdrant.set_payload(
+        collection_name=COLLECTION,
+        payload={'org_id': new_org_id},
+        points_selector=Filter(must=[FieldCondition(key='org_id', match=MatchValue(value=old_org_id))]),
+    )
+    with bm25_lock:
+        bm25_indices.pop(old_org_id, None)
+        bm25_corpora.pop(old_org_id, None)
+        bm25_indices.pop(new_org_id, None)
+        bm25_corpora.pop(new_org_id, None)
+
+
+def backfill_qdrant_org_ids():
+    """One-time migration for points that predate org_id and carry only user_id.
+
+    Scrolls the whole collection, groups legacy points by user_id, and batches
+    set_payload calls per resolved org. Safe to re-run — points that already
+    have org_id are skipped.
+    """
+    all_records = []
+    offset = None
+    while True:
+        batch, offset = qdrant.scroll(
+            collection_name=COLLECTION, with_payload=True, limit=1000, offset=offset
+        )
+        all_records.extend(batch)
+        if offset is None:
+            break
+
+    legacy_by_user = {}
+    for r in all_records:
+        if r.payload.get('org_id'):
+            continue
+        uid = r.payload.get('user_id')
+        if uid:
+            legacy_by_user.setdefault(uid, []).append(str(r.id))
+
+    updated = 0
+    for uid, point_ids in legacy_by_user.items():
+        org_id = get_or_create_org_for_user(uid)
+        qdrant.set_payload(collection_name=COLLECTION, payload={'org_id': org_id}, points=point_ids)
+        updated += len(point_ids)
+
+    logging.info(f"[qdrant] backfilled org_id for {updated} point(s) across {len(legacy_by_user)} user(s)")
+    return updated
 
 
 def _graph_force_full_rebuild():
@@ -937,43 +1132,44 @@ def rebuild_graph_for_user(user_id, source_filename=None):
     Falls back to the old full evict+reload on error, when explicitly forced via
     GRAPH_FORCE_FULL_REBUILD, or when no source_filename is given.
     """
+    org_id = get_or_create_org_for_user(user_id)
     if source_filename and not _graph_force_full_rebuild():
         try:
-            _incremental_update_graph_for_user(user_id, source_filename)
+            _incremental_update_graph_for_user(org_id, source_filename)
             return
         except Exception as e:
-            logging.warning(f"[graph] incremental update failed for user {user_id[:8]}..., "
+            logging.warning(f"[graph] incremental update failed for org {org_id}, "
                              f"falling back to full rebuild: {e}")
     with _graph_lock:
-        _graph_store.pop(user_id, None)
+        _graph_store.pop(org_id, None)
     get_graph_for_user(user_id)
-    logging.info(f"[graph] cache refreshed for user {user_id[:8]}...")
+    logging.info(f"[graph] cache refreshed for org {org_id}")
 
 
-def _incremental_update_graph_for_user(user_id, source_filename):
+def _incremental_update_graph_for_user(org_id, source_filename):
     """Patch the cached graph with source_filename's current edges/nodes.
 
     Held under _graph_lock for the entire remove-then-add so concurrent mutation
     isn't interleaved (NetworkX mutation across multiple add_edge calls isn't atomic).
-    Does nothing if the user's graph isn't cached yet — the next lazy
+    Does nothing if the org's graph isn't cached yet — the next lazy
     get_graph_for_user() call will build it fresh from Supabase, which already
     reflects this upload since extract_and_store_graph committed it first.
     """
     with _graph_lock:
-        if user_id not in _graph_store:
+        if org_id not in _graph_store:
             return
 
     edges_res = supabase_admin.table('graph_edges')\
         .select('source_entity,relation,target_entity,chunk_id,source_doc,page_num')\
-        .eq('user_id', user_id).eq('source_doc', source_filename).execute()
+        .eq('org_id', org_id).eq('source_doc', source_filename).execute()
     nodes_res = supabase_admin.table('graph_nodes')\
         .select('entity_name,entity_type,aliases')\
-        .eq('user_id', user_id).execute()
+        .eq('org_id', org_id).execute()
     edges = edges_res.data or []
     nodes = nodes_res.data or []
 
     with _graph_lock:
-        G = _graph_store.get(user_id)
+        G = _graph_store.get(org_id)
         if G is None:
             return
         stale_edges = [(u, v) for u, v, data in G.edges(data=True)
@@ -990,7 +1186,7 @@ def _incremental_update_graph_for_user(user_id, source_filename):
                 source_doc=edge['source_doc'],
                 page_num=edge.get('page_num'),
             )
-    logging.info(f"[graph] incrementally updated user {user_id[:8]}... "
+    logging.info(f"[graph] incrementally updated org {org_id} "
                  f"({len(edges)} edges for {source_filename!r})")
 
 
@@ -1416,30 +1612,34 @@ _kb_version_lock = threading.Lock()
 
 
 def get_kb_version(user_id):
+    """Org-shared version counter — any member's upload invalidates the whole
+    org's cached answers, since the retrieval corpus behind them is shared."""
+    org_id = get_or_create_org_for_user(user_id)
     with _kb_version_lock:
-        if user_id in _kb_version_cache:
-            return _kb_version_cache[user_id]
+        if org_id in _kb_version_cache:
+            return _kb_version_cache[org_id]
     version = 0
     if redis_client:
         try:
-            raw = redis_client.get(f"kbversion:{user_id}")
+            raw = redis_client.get(f"kbversion:{org_id}")
             if raw is not None:
                 version = int(raw)
         except Exception:
             version = 0
     with _kb_version_lock:
-        _kb_version_cache[user_id] = version
+        _kb_version_cache[org_id] = version
     return version
 
 
 def bump_kb_version(user_id):
+    org_id = get_or_create_org_for_user(user_id)
     current = get_kb_version(user_id)
     new_version = current + 1
     with _kb_version_lock:
-        _kb_version_cache[user_id] = new_version
+        _kb_version_cache[org_id] = new_version
     if redis_client:
         try:
-            redis_client.set(f"kbversion:{user_id}", new_version)
+            redis_client.set(f"kbversion:{org_id}", new_version)
         except Exception:
             pass
     return new_version
@@ -1457,12 +1657,12 @@ _semantic_l1_lock = threading.Lock()
 _semantic_entry_ids = itertools.count()
 
 
-def _semantic_redis_key(user_id):
-    return f"semcache:{user_id}"
+def _semantic_redis_key(org_id):
+    return f"semcache:{org_id}"
 
 
-def _semantic_l1_put(user_id, entry):
-    key = (user_id, next(_semantic_entry_ids))
+def _semantic_l1_put(org_id, entry):
+    key = (org_id, next(_semantic_entry_ids))
     with _semantic_l1_lock:
         _semantic_l1[key] = entry
         _semantic_l1.move_to_end(key)
@@ -1470,12 +1670,14 @@ def _semantic_l1_put(user_id, entry):
             _semantic_l1.popitem(last=False)
 
 
-def _semantic_l1_user_entries(user_id):
+def _semantic_l1_user_entries(org_id):
     with _semantic_l1_lock:
-        return [entry for (uid, _), entry in _semantic_l1.items() if uid == user_id]
+        return [entry for (oid, _), entry in _semantic_l1.items() if oid == org_id]
 
 
 def semantic_cache_store(user_id, question, query_vec, response, sources, model_version, kb_version):
+    """Org-scoped so a member sees a teammate's cached answer to the same question."""
+    org_id = get_or_create_org_for_user(user_id)
     entry = {
         'question': question,
         'query_vec': [float(x) for x in query_vec],
@@ -1484,11 +1686,11 @@ def semantic_cache_store(user_id, question, query_vec, response, sources, model_
         'model_version': model_version,
         'kb_version': kb_version,
     }
-    _semantic_l1_put(user_id, entry)
+    _semantic_l1_put(org_id, entry)
     if not redis_client:
         return
     try:
-        key = _semantic_redis_key(user_id)
+        key = _semantic_redis_key(org_id)
         raw = redis_client.get(key)
         entries = json.loads(raw) if raw else []
         entries.append(entry)
@@ -1500,15 +1702,16 @@ def semantic_cache_store(user_id, question, query_vec, response, sources, model_
 
 
 def semantic_cache_lookup(user_id, query_vec, model_version, kb_version):
-    """Best cosine match for this user's cached entries above SEMANTIC_CACHE_THRESHOLD.
+    """Best cosine match for this user's org's cached entries above SEMANTIC_CACHE_THRESHOLD.
 
     Metadata (model_version, kb_version) must match exactly — a high similarity score
     alone is never enough, since a reindex or model change can invalidate old answers.
     """
-    candidates = _semantic_l1_user_entries(user_id)
+    org_id = get_or_create_org_for_user(user_id)
+    candidates = _semantic_l1_user_entries(org_id)
     if not candidates and redis_client:
         try:
-            raw = redis_client.get(_semantic_redis_key(user_id))
+            raw = redis_client.get(_semantic_redis_key(org_id))
             candidates = json.loads(raw) if raw else []
         except Exception:
             candidates = []
@@ -1750,8 +1953,9 @@ def ask():
             except Exception as e:
                 logging.warning(f"Failed to fetch session history: {e}")
 
-        # Only use Redis cache for single-turn (no prior context)
-        cache_key = f"{user_id}:{question}" if not conversation_history else None
+        # Only use Redis cache for single-turn (no prior context). Org-scoped so
+        # an org member's identical question hits a teammate's cached answer.
+        cache_key = f"{get_or_create_org_for_user(user_id)}:{question}" if not conversation_history else None
         response, sources = get_cached_response(cache_key) if cache_key else (None, None)
         from_cache = response is not None
 
@@ -1798,4 +2002,4 @@ def ask():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
