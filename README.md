@@ -27,15 +27,16 @@ DocSense AI lets users upload PDF documents and query them using natural languag
 
 ## Features
 
-- **Agentic RAG** — Query decomposition breaks complex questions into sub-queries; a CRAG loop grades retrieved chunks and reformulates the query when relevance is low before final synthesis.
-- **Hybrid Retrieval** — Dense search via FastEmbed and sparse BM25 are fused with Reciprocal Rank Fusion (RRF), then reranked by a cross-encoder for highest-precision context selection.
-- **Graph RAG** — Entities and relationships are extracted at index time into a per-user NetworkX graph stored in Supabase. At query time, 2-hop BFS expansion enriches retrieved chunks with semantically linked neighbors from across the document set.
+- **Agentic RAG** — Query decomposition breaks complex questions into sub-queries; a bounded CRAG loop grades retrieved chunks and reformulates the query when relevance is low before final synthesis.
+- **Hybrid Retrieval** — Dense search via FastEmbed and sparse BM25 (incrementally updated on upload, not fully rebuilt) are fused with Reciprocal Rank Fusion (RRF), then reranked by a cross-encoder. Retrieval width (`top_k`) is configurable and scales with query complexity.
+- **Graph RAG** — Entities and relationships are extracted at index time into a per-organization NetworkX graph stored in Supabase, with alias-based entity linking to merge duplicate mentions. At query time, 2-hop BFS expansion enriches retrieved chunks with semantically linked neighbors from across the document set.
+- **Org-Level Data Sharing** — Vector store, graph, and BM25 index are scoped to `org_id` rather than `user_id`, so teammates in the same organization share a knowledge base instead of siloed per-user data.
 - **Multimodal RAG** — Tables and figures are extracted during indexing. Captionless figures and scanned pages are captioned by Groq's Llama 4 Scout vision model before entering the retrieval pipeline.
 - **Two-Tier Caching** — L1 in-memory TTLCache for hot responses; L2 Redis (Upstash) for distributed persistence; SQLite as a fallback when Redis is unavailable.
 - **Semantic Cache** — Exact-match cache misses fall through to a cosine-similarity lookup over per-user cached Q&A (embedding reused from retrieval), so differently-worded repeats of the same question ("reset my password" vs "forgot password") still hit cache. Matches require the same model version and knowledge-base version, so a reindex or model change invalidates stale entries automatically.
 - **Multi-Turn Sessions** — Conversation history is stored in Supabase and forwarded to the LLM on each turn, enabling coherent follow-up questions across a session.
 - **Source Citations** — Every answer includes chunk snippets, source file names, page numbers, and sigmoid-normalized confidence scores.
-- **Supabase Auth** — JWT-based authentication protects all API endpoints; per-user document isolation at the vector, graph, and history layer.
+- **Supabase Auth** — JWT-based authentication protects all API endpoints; document isolation enforced at the vector, graph, and history layer by organization.
 - **LLM Redundancy** — Groq (primary) with automatic Gemini 2.0 Flash fallback ensures availability when one provider is degraded.
 - **CI Pipeline** — GitHub Actions runs the pytest suite on every push.
 
@@ -157,12 +158,14 @@ The container starts Gunicorn on port `10000`.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/` | Web application |
+| GET | `/health` | Health check (no auth) |
 | POST | `/upload` | Upload a PDF (`pdf` form field) |
 | GET | `/documents` | List indexed documents with chunk counts |
+| GET | `/figure-url` | Get a signed URL for an extracted table/figure image |
 | POST | `/ask` | Ask a question (`question`, `session_id`); returns `{ response, sources }` |
 | GET | `/history` | Retrieve session-grouped conversation history |
 
-All endpoints except `GET /` require a valid Supabase JWT in the `Authorization` header.
+All endpoints except `GET /` and `GET /health` require a valid Supabase JWT in the `Authorization` header.
 
 ## Contributing
 
