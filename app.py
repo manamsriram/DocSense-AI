@@ -102,17 +102,19 @@ _reranker_model = None
 _model_lock = threading.Lock()
 
 
-# Embedding/reranker ONNX models are hosted on a separate model_service dyno
-# (own memory budget) instead of loading in-process here — loading both in this
-# process was OOM-crashing the 512MB Render web dyno on every /ask request.
-MODEL_SERVICE_URL = (os.getenv('MODEL_SERVICE_URL') or '').rstrip('/')
+# Embedding/reranker ONNX models are hosted on two separate model_service dynos
+# (one per model, own memory budget each) instead of loading in-process here —
+# loading both together, even in one separate service, still OOM'd a 512MB
+# dyno under real rerank batch sizes.
+EMBED_SERVICE_URL = (os.getenv('EMBED_SERVICE_URL') or '').rstrip('/')
+RERANK_SERVICE_URL = (os.getenv('RERANK_SERVICE_URL') or '').rstrip('/')
 MODEL_SERVICE_SECRET = os.getenv('MODEL_SERVICE_SECRET', '')
 
 
 class _RemoteEmbedder:
     def embed(self, texts):
         resp = requests.post(
-            f'{MODEL_SERVICE_URL}/embed',
+            f'{EMBED_SERVICE_URL}/embed',
             json={'texts': list(texts)},
             headers={'X-Service-Secret': MODEL_SERVICE_SECRET},
             timeout=60
@@ -124,7 +126,7 @@ class _RemoteEmbedder:
 class _RemoteReranker:
     def rerank(self, query, documents):
         resp = requests.post(
-            f'{MODEL_SERVICE_URL}/rerank',
+            f'{RERANK_SERVICE_URL}/rerank',
             json={'query': query, 'documents': list(documents)},
             headers={'X-Service-Secret': MODEL_SERVICE_SECRET},
             timeout=60
