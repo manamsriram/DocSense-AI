@@ -78,10 +78,16 @@ def rerank():
     documents = body['documents']
     scores = []
     with _rerank_lock:
-        for i in range(0, len(documents), RERANK_BATCH_SIZE):
+        for batch_num, i in enumerate(range(0, len(documents), RERANK_BATCH_SIZE)):
             batch = documents[i:i + RERANK_BATCH_SIZE]
             scores.extend(float(s) for s in _reranker_model.rerank(query, batch))
-            gc.collect()
+            # Collecting every sub-batch (10x for a 30-doc rerank at batch
+            # size 3) was pushing hard, multi-iteration questions past
+            # Render's ~30s gateway timeout. Every other batch still bounds
+            # arena growth without doubling gc overhead.
+            if batch_num % 2 == 1:
+                gc.collect()
+        gc.collect()
     return jsonify({'scores': scores})
 
 

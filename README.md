@@ -153,6 +153,27 @@ The container starts Gunicorn on port `10000`.
 
 **Caching:** cache key hashed from `(user_id, question, session_id)` → check TTLCache → check Redis → check SQLite → on exact-match miss, check semantic cache (cosine similarity over per-user cached Q&A, gated by model version + knowledge-base version) → on full miss, run full pipeline and populate all layers.
 
+## Evaluation
+
+RAG quality is measured end-to-end against a fixed benchmark corpus, not
+through unit tests — `evals/run_eval.py` drives the real `/ask` endpoint over
+HTTP for each benchmark question and scores the live response (correctness,
+groundedness, citation quality, completeness, latency), producing a single
+`weighted_rag_score`. Results are written to `evals/latest_results.json`
+(per-case detail) and appended to `evals/history.json` (run-over-run trend),
+so a change is only kept if it improves or holds the score under the
+regression gates in `CLAUDE.md`.
+
+```bash
+export DOCSENSE_EVAL_BASE_URL=http://127.0.0.1:5000
+export DOCSENSE_EVAL_BEARER_TOKEN=your_token_here
+export DOCSENSE_EVAL_SESSION_ID=eval-session
+python evals/run_eval.py
+```
+
+See [`evals/README.md`](evals/README.md) for the benchmark format, scoring
+formula, and regression gates in full.
+
 ## API Reference
 
 | Method | Endpoint | Description |
