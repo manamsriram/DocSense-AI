@@ -21,6 +21,7 @@ import uuid
 import gc
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+import requests
 from groq import Groq
 from openai import OpenAI
 from google import genai
@@ -62,6 +63,12 @@ GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
 _gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 COLLECTION = 'documents'
+
+# Offload PDF ingestion (parse + embed + graph extraction + vision) to a GitHub
+# Actions runner: the 512MB Render instance OOMs on large PDFs, the runner has 7GB.
+# Unset in local dev -> /upload falls back to indexing inline on the request thread.
+GITHUB_DISPATCH_TOKEN = os.getenv('GITHUB_DISPATCH_TOKEN')
+GITHUB_REPO = os.getenv('GITHUB_REPO')
 
 # Fail fast if required env vars are missing
 _required = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_KEY', 'GROQ_API_KEY', 'QDRANT_URL', 'QDRANT_API_KEY']
@@ -1860,6 +1867,28 @@ def index():
     )
 
 
+def _trigger_ingest_workflow(storage_path, user_id, filename, display_name):
+    """Fire a repository_dispatch so a GitHub Actions runner ingests the PDF."""
+    resp = requests.post(
+        f'https://api.github.com/repos/{GITHUB_REPO}/dispatches',
+        headers={
+            'Authorization': f'Bearer {GITHUB_DISPATCH_TOKEN}',
+            'Accept': 'application/vnd.github+json',
+        },
+        json={
+            'event_type': 'ingest_pdf',
+            'client_payload': {
+                'storage_path': storage_path,
+                'user_id': user_id,
+                'filename': filename,
+                'display_name': display_name,
+            },
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+
+
 @app.route('/upload', methods=['POST'])
 @require_auth
 def upload_pdf():
@@ -1892,20 +1921,32 @@ def upload_pdf():
             file_options={'content-type': 'application/pdf'}
         )
 
-        # Index to Qdrant
+        supabase_admin.table('documents').delete().eq('user_id', user_id).eq('filename', filename).execute()
+
+        if GITHUB_DISPATCH_TOKEN and GITHUB_REPO:
+            supabase_admin.table('documents').insert({
+                'user_id': user_id,
+                'filename': filename,
+                'storage_path': storage_path,
+                'chunk_count': 0,
+                'status': 'processing'
+            }).execute()
+            _trigger_ingest_workflow(storage_path, user_id, filename, original_name)
+            return jsonify({'message': f'{filename} queued for indexing', 'status': 'processing'}), 202
+
+        # ponytail: no dispatch config (local dev) -> index inline, as before
         count = index_pdf(tmp.name, user_id, force=True, display_name=original_name)
         rebuild_bm25_for_user(user_id, source_filename=original_name)
         rebuild_graph_for_user(user_id, source_filename=original_name)
         bump_kb_version(user_id)
         check_qdrant_shard_threshold()
 
-        # Upsert documents record in Supabase
-        supabase_admin.table('documents').delete().eq('user_id', user_id).eq('filename', filename).execute()
         supabase_admin.table('documents').insert({
             'user_id': user_id,
             'filename': filename,
             'storage_path': storage_path,
-            'chunk_count': count
+            'chunk_count': count,
+            'status': 'ready'
         }).execute()
 
         return jsonify({'message': f'Successfully indexed {count} chunks from {filename}'})
@@ -1922,12 +1963,19 @@ def list_documents():
     try:
         res = (
             supabase_admin.table('documents')
-            .select('filename,chunk_count')
+            .select('filename,chunk_count,status')
             .eq('user_id', g.user_id)
             .order('created_at')
             .execute()
         )
-        documents = [{'filename': row['filename'], 'chunks': row['chunk_count']} for row in res.data]
+        documents = [
+            {
+                'filename': row['filename'],
+                'chunks': row['chunk_count'],
+                'status': row.get('status') or 'ready',
+            }
+            for row in res.data
+        ]
         return jsonify({'documents': documents})
     except Exception as e:
         logging.error(f"Error in /documents: {e}")

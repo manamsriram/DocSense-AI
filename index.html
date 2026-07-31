@@ -45,7 +45,7 @@
         <div class="doc-row">
           <span>📄</span>
           <span class="doc-row-name" x-text="doc.filename"></span>
-          <span class="doc-row-meta" x-text="doc.chunks + ' chunks'"></span>
+          <span class="doc-row-meta" x-text="doc.status === 'processing' ? 'indexing…' : doc.status === 'failed' ? 'failed' : doc.chunks + ' chunks'"></span>
         </div>
       </template>
     </div>

@@ -182,6 +182,11 @@ document.addEventListener('alpine:init', () => {
         const res = await fetch('/documents', { headers: this.authHeaders() });
         const data = await res.json();
         this.documents = data.documents || [];
+        // Ingestion runs off-process on a CI runner; poll until it lands.
+        if (this.documents.some((d) => d.status === 'processing')) {
+          clearTimeout(this._docPoll);
+          this._docPoll = setTimeout(() => this.loadDocuments(), 10000);
+        }
       } catch (e) {
         console.error('Failed to load documents:', e);
       }
