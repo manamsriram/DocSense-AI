@@ -18,6 +18,7 @@ import numpy as np
 import logging
 import threading
 import uuid
+import gc
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from groq import Groq
@@ -307,35 +308,45 @@ def _incremental_update_bm25_for_user(org_id, source_filename):
 
 
 def rebuild_all_bm25():
-    """Scroll all Qdrant records and rebuild per-org BM25 indices."""
-    all_records = []
+    """Rebuild per-org BM25 indices one org at a time (filtered scrolls) instead
+    of loading every org's chunks into memory at once — bounds peak memory to a
+    single org's corpus regardless of total collection size."""
+    org_ids = set()
     offset = None
     while True:
         batch, offset = qdrant.scroll(
-            collection_name=COLLECTION, with_payload=True, limit=1000, offset=offset
+            collection_name=COLLECTION, with_payload=['org_id'], limit=1000, offset=offset
         )
-        all_records.extend(batch)
+        org_ids.update(r.payload.get('org_id') for r in batch if r.payload.get('org_id'))
         if offset is None:
             break
-
-    org_chunks = {}
-    for r in all_records:
-        org_id = r.payload.get('org_id')
-        if org_id:
-            org_chunks.setdefault(org_id, []).append(r)
 
     with bm25_lock:
         bm25_indices.clear()
         bm25_corpora.clear()
 
-    for org_id, records in org_chunks.items():
-        texts = [r.payload.get('text', '') for r in records]
-        ids = [str(r.id) for r in records]
+    for org_id in org_ids:
+        ids, texts = [], []
+        offset = None
+        while True:
+            batch, offset = qdrant.scroll(
+                collection_name=COLLECTION,
+                scroll_filter=Filter(must=[FieldCondition(key='org_id', match=MatchValue(value=org_id))]),
+                with_payload=True,
+                limit=1000,
+                offset=offset
+            )
+            ids.extend(str(r.id) for r in batch)
+            texts.extend(r.payload.get('text', '') for r in batch)
+            if offset is None:
+                break
         tokenized = [t.lower().split() for t in texts]
         with bm25_lock:
             bm25_indices[org_id] = BM25Okapi(tokenized)
             bm25_corpora[org_id] = list(zip(ids, texts))
-    logging.info(f"BM25 rebuilt for {len(org_chunks)} org(s)")
+        del ids, texts, tokenized
+        gc.collect()
+    logging.info(f"BM25 rebuilt for {len(org_ids)} org(s)")
 
 
 def preprocess(text):
@@ -374,6 +385,7 @@ MAX_VISION_CALLS_PER_DOC = 20            # rate-limit guard for large uploads
 GRAPH_BATCH_SIZE = 4
 MAX_GRAPH_BATCHES_PER_DOC = 50
 MAX_GRAPH_NEIGHBORS = 10
+INDEX_FLUSH_CHUNK_SIZE = 200   # embed+upsert every N chunks instead of buffering the whole PDF
 
 _FIGURE_CAPTION_PROMPT = (
     'Describe this figure from a document in 2-3 sentences for search indexing. '
@@ -590,10 +602,40 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
     if force:
         _delete_stored_figures(figure_dir)
 
-    points = []       # (point_id, page_num, display_text, extra_payload)
+    points = []       # (point_id, page_num, display_text, extra_payload) — current flush buffer
     embed_texts = []
+    graph_eligible = []   # (point_id, page_num, display_text) across all flushes, for graph pass below
+    total_indexed = 0
     counts = {'text': 0, 'table': 0, 'figure': 0, 'scanned': 0}
     vision_budget = {'remaining': MAX_VISION_CALLS_PER_DOC}
+
+    def flush():
+        nonlocal points, embed_texts, total_indexed
+        if not points:
+            return
+        vecs = list(get_embedding_model().embed(embed_texts))
+        qdrant.upsert(
+            collection_name=COLLECTION,
+            points=[
+                PointStruct(
+                    id=point_id,
+                    vector=vec.tolist(),
+                    payload={'source': filename, 'page': page_num, 'text': display_text,
+                             'user_id': user_id, 'org_id': org_id, **extra}
+                )
+                for (point_id, page_num, display_text, extra), vec in zip(points, vecs)
+            ]
+        )
+        graph_eligible.extend(
+            (point_id, page_num, display_text)
+            for point_id, page_num, display_text, extra in points
+            if extra.get('type') in ('text', 'table', 'scanned')
+        )
+        total_indexed += len(points)
+        points = []
+        embed_texts = []
+        del vecs
+        gc.collect()
 
     for page_num in range(doc.page_count):
         page = doc[page_num]
@@ -645,36 +687,21 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
             points.append((point_id, pno, display_text, extra))
             counts['figure'] += 1
 
-    doc.close()
+        if len(points) >= INDEX_FLUSH_CHUNK_SIZE:
+            flush()
 
-    if not points:
+    doc.close()
+    flush()
+
+    if total_indexed == 0:
         return 0
 
-    vecs = list(get_embedding_model().embed(embed_texts))
-
-    qdrant.upsert(
-        collection_name=COLLECTION,
-        points=[
-            PointStruct(
-                id=point_id,
-                vector=vec.tolist(),
-                payload={'source': filename, 'page': page_num, 'text': display_text,
-                         'user_id': user_id, 'org_id': org_id, **extra}
-            )
-            for (point_id, page_num, display_text, extra), vec in zip(points, vecs)
-        ]
-    )
     logging.info(
-        f"Indexed {len(points)} chunks from {filename} for user {user_id[:8]}... "
+        f"Indexed {total_indexed} chunks from {filename} for user {user_id[:8]}... "
         f"({counts['text']} text, {counts['table']} table, {counts['figure']} figure, "
         f"{counts['scanned']} scanned)"
     )
 
-    graph_eligible = [
-        (point_id, page_num, display_text)
-        for point_id, page_num, display_text, extra in points
-        if extra.get('type') in ('text', 'table', 'scanned')
-    ]
     batches_run = 0
     for i in range(0, len(graph_eligible), GRAPH_BATCH_SIZE):
         if batches_run >= MAX_GRAPH_BATCHES_PER_DOC:
@@ -686,7 +713,7 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
         batches_run += 1
     logging.info(f"[graph] ran {batches_run} extraction batches for {filename}")
 
-    return len(points)
+    return total_indexed
 
 
 def init_index():
