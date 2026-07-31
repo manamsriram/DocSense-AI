@@ -41,7 +41,10 @@ app = Flask(__name__, static_url_path='', static_folder='.')
 
 # LLM via Groq (free tier)
 groq_client = Groq(api_key=os.getenv('GROQ_API_KEY'))
-GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
+# llama-3.3-70b-versatile was deprecated 2026-06-17; gpt-oss-120b is Groq's own
+# recommended replacement (qwen3.6-27b, the other suggestion, leaks <think> blocks
+# into message content).
+GROQ_MODEL = os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b')
 GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'qwen/qwen3.6-27b')
 # High-volume graph-triple extraction during ingestion runs on OpenRouter instead
 # of Groq — the 70B Groq model's tight TPM/RPM limits caused 429 storms across the
@@ -51,8 +54,7 @@ openrouter_client = OpenAI(
     api_key=_openrouter_api_key, base_url='https://openrouter.ai/api/v1'
 ) if _openrouter_api_key else None
 GRAPH_MODEL = os.getenv('GRAPH_MODEL', 'google/gemini-2.5-flash-lite')
-# Primary model for final answer generation, routed through OpenRouter. Groq's
-# GROQ_MODEL is deprecated (see console.groq.com/docs/deprecations) and both Groq's
+# Primary model for final answer generation, routed through OpenRouter. Both Groq's
 # daily token quota and Gemini's free-tier daily quota can be exhausted independently,
 # so OpenRouter — a third, separately-billed provider — goes first; Groq/Gemini remain
 # as fallbacks below.
