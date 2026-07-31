@@ -1079,7 +1079,7 @@ def test_extract_and_store_graph_writes_org_id_and_upserts_org_scoped():
 
     with patch('app.supabase_admin', mock_supabase), \
          patch('app.get_or_create_org_for_user', return_value='org-extract-1'), \
-         patch('app._call_groq_helper', return_value=llm_response):
+         patch('app._call_openrouter_helper', return_value=llm_response):
         extract_and_store_graph([('c1', 1, 'Acme employs Bob.')], 'user-extract-1', 'doc.pdf')
 
     assert upserted['on_conflict'] == 'org_id,entity_name'
@@ -1176,7 +1176,7 @@ def test_extract_and_store_graph_merges_new_aliases_with_existing():
     )
 
     with patch('app.supabase_admin', mock_supabase), \
-         patch('app._call_groq_helper', return_value=llm_response):
+         patch('app._call_openrouter_helper', return_value=llm_response):
         extract_and_store_graph([('c1', 1, 'Microsoft owns Azure.')], 'alias-user-3', 'doc.pdf')
 
     aliases = upserted['rows'][0]['aliases']
