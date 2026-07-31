@@ -32,9 +32,14 @@ ENV FASTEMBED_CACHE_PATH=/model-cache
 
 EXPOSE 10000
 
-# Single worker — models live in process memory, this service's sole job.
-# max-requests recycles the worker periodically: ONNX runtime's arena grows
-# across inference calls and doesn't fully release back to the OS, which
-# OOM-killed this 512MB dyno under sustained real traffic even with one model.
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--workers", "1", "--timeout", "60", \
+# Single worker process — models live in process memory, this service's sole
+# job, and a second worker would double that memory on a 512MB dyno. Threads
+# instead of pure sync: batched /rerank calls block long enough (multiple
+# ONNX sub-batches) that Render's own /health probe times out on a sync
+# worker and kills the instance mid-request; ONNX releases the GIL during
+# inference so a health-check thread can still respond while rerank runs.
+# max-requests recycles the worker periodically since ONNX's memory arena
+# grows across inference calls and doesn't fully release back to the OS.
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--workers", "1", \
+     "--worker-class", "gthread", "--threads", "4", "--timeout", "60", \
      "--max-requests", "40", "--max-requests-jitter", "10", "service:app"]
