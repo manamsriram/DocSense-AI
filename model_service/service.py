@@ -60,7 +60,7 @@ def embed():
     return jsonify({'vectors': vectors})
 
 
-RERANK_BATCH_SIZE = 6  # bounds peak ONNX arena size per call on a 512MB dyno
+RERANK_BATCH_SIZE = 3  # bounds peak ONNX arena size per call on a 512MB dyno
 
 # gthread lets a health-check thread answer while another thread reranks, but
 # two concurrent /rerank calls would each hold their own ONNX arena at once
