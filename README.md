@@ -57,9 +57,9 @@ DocSense AI lets users upload PDF documents and query them using natural languag
 | Caching | TTLCache (L1) → Redis/Upstash (L2) → SQLite (fallback) |
 | PDF Processing | PyMuPDF |
 | Text Splitting | LangChain text splitters |
-| Hosting | Render (backend), Vercel (frontend proxy) |
+| Hosting | Render (main app + 2 model dynos), Vercel (frontend proxy) |
 | Containerization | Docker |
-| CI/CD | GitHub Actions |
+| CI/CD | GitHub Actions (CI tests + async PDF ingestion offload) |
 
 ## Getting Started
 
@@ -152,6 +152,19 @@ The container starts Gunicorn on port `10000`.
 **Query flow:** question → (optional) query decomposition → hybrid search (Qdrant dense + BM25 sparse, fused via RRF) → graph expansion (2-hop BFS on knowledge graph) → cross-encoder rerank → CRAG grading loop → `generate_text()` (Groq / Gemini fallback) → response with citations.
 
 **Caching:** cache key hashed from `(user_id, question, session_id)` → check TTLCache → check Redis → check SQLite → on exact-match miss, check semantic cache (cosine similarity over per-user cached Q&A, gated by model version + knowledge-base version) → on full miss, run full pipeline and populate all layers.
+
+### Service split (why there are 4 deployment targets, not 1)
+
+A single 512MB Render instance OOM'd once the embedding model, the reranker, and PDF ingestion all fought for the same memory. Each concern was pulled onto its own dyno/runner instead of scaling up one box:
+
+| Service | Role | Why separate |
+|---|---|---|
+| **Main app** (Render, `app.py`) | Flask API, `/ask`, `/upload`, retrieval orchestration | Stays lean — no ONNX models loaded in-process |
+| **`model_service/` — embed dyno** (Render, `MODEL_ROLE=embed`) | FastEmbed `all-MiniLM-L6-v2` | Its own memory budget, isolated from the reranker |
+| **`model_service/` — rerank dyno** (Render, `MODEL_ROLE=rerank`) | Cross-encoder rerank | Same codebase, opposite `MODEL_ROLE`; concurrent `/rerank` calls are serialized (`_rerank_lock`) and batched (`RERANK_BATCH_SIZE=3`, periodic `gc.collect()`) so one ONNX arena at a time stays under 512MB |
+| **GitHub Actions runner** (`.github/workflows/ingest.yml`) | PDF ingestion (chunk/embed/graph-extract) | `/upload` just stores the file and dispatches a `repository_dispatch` event — indexing runs on a 7GB Actions runner instead of the request thread, which used to OOM the main app on large PDFs |
+
+Main app calls the two model dynos over HTTP (`EMBED_SERVICE_URL`, `RERANK_SERVICE_URL`, shared `MODEL_SERVICE_SECRET` via `X-Service-Secret` header) instead of loading models in-process. See `.env.example` for the required vars.
 
 ## Evaluation
 
