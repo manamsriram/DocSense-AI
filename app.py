@@ -129,7 +129,11 @@ def get_reranker_model():
 
 
 # Qdrant Cloud vector store
-qdrant = QdrantClient(url=os.getenv('QDRANT_URL'), api_key=os.getenv('QDRANT_API_KEY'))
+# .strip(): a stray newline in the CI secret makes the api-key header illegal
+qdrant = QdrantClient(
+    url=(os.getenv('QDRANT_URL') or '').strip(),
+    api_key=(os.getenv('QDRANT_API_KEY') or '').strip(),
+)
 if not qdrant.collection_exists(COLLECTION):
     qdrant.create_collection(
         collection_name=COLLECTION,
@@ -1931,7 +1935,13 @@ def upload_pdf():
                 'chunk_count': 0,
                 'status': 'processing'
             }).execute()
-            _trigger_ingest_workflow(storage_path, user_id, filename, original_name)
+            try:
+                _trigger_ingest_workflow(storage_path, user_id, filename, original_name)
+            except Exception as e:
+                logging.error(f"Ingest dispatch failed for {storage_path}: {e}", exc_info=True)
+                (supabase_admin.table('documents').update({'status': 'failed'})
+                 .eq('user_id', user_id).eq('filename', filename).execute())
+                return jsonify({'error': 'Could not queue indexing, please try again'}), 502
             return jsonify({'message': f'{filename} queued for indexing', 'status': 'processing'}), 202
 
         # ponytail: no dispatch config (local dev) -> index inline, as before
