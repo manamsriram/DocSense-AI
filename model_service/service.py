@@ -59,6 +59,9 @@ def embed():
     return jsonify({'vectors': vectors})
 
 
+RERANK_BATCH_SIZE = 6  # bounds peak ONNX arena size per call on a 512MB dyno
+
+
 @app.route('/rerank', methods=['POST'])
 @require_secret
 def rerank():
@@ -67,8 +70,11 @@ def rerank():
     body = request.get_json(force=True)
     query = body['query']
     documents = body['documents']
-    scores = [float(s) for s in _reranker_model.rerank(query, documents)]
-    gc.collect()
+    scores = []
+    for i in range(0, len(documents), RERANK_BATCH_SIZE):
+        batch = documents[i:i + RERANK_BATCH_SIZE]
+        scores.extend(float(s) for s in _reranker_model.rerank(query, batch))
+        gc.collect()
     return jsonify({'scores': scores})
 
 
