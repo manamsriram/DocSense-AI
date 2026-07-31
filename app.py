@@ -110,9 +110,12 @@ def get_embedding_model():
         with _model_lock:
             if _embedding_model is None:
                 logging.info("Loading embedding model via fastembed...")
+                # threads=1: caps onnxruntime's intra-op thread pool/arena allocation,
+                # which otherwise scales with CPU count and can exceed the 512MB dyno.
                 _embedding_model = TextEmbedding(
                     model_name='sentence-transformers/all-MiniLM-L6-v2',
-                    cache_dir=os.getenv('FASTEMBED_CACHE_PATH', None)
+                    cache_dir=os.getenv('FASTEMBED_CACHE_PATH', None),
+                    threads=1
                 )
     return _embedding_model
 
@@ -125,7 +128,8 @@ def get_reranker_model():
                 logging.info("Loading reranker via fastembed...")
                 _reranker_model = TextCrossEncoder(
                     model_name='Xenova/ms-marco-MiniLM-L-6-v2',
-                    cache_dir=os.getenv('FASTEMBED_CACHE_PATH', None)
+                    cache_dir=os.getenv('FASTEMBED_CACHE_PATH', None),
+                    threads=1
                 )
     return _reranker_model
 
