@@ -207,6 +207,7 @@ def test_ask_returns_response_and_sources():
          patch('app.find_relevant_chunks_with_graph', return_value=chunks), \
          patch('app.generate_text', return_value='Answer text'), \
          patch('app.get_cached_response', return_value=(None, None)), \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
          patch('app.cache_response'):
 
         import app as flask_app
@@ -243,8 +244,13 @@ def test_ask_cached_response_returned_directly():
         mock_gen.assert_not_called()
 
 
-def _fake_embedding_model(vec=(1.0, 0.0, 0.0)):
+def _fake_embedding_model(vec=None):
     import numpy as np
+    if vec is None:
+        # 384-dim to match the real all-MiniLM-L6-v2 output — avoids shape
+        # mismatches against real vectors left in the module-level semantic
+        # cache by other tests in the same process.
+        vec = [1.0] + [0.0] * 383
     model = MagicMock()
     model.embed.return_value = [np.array(vec)]
     return model
@@ -445,6 +451,7 @@ def test_ask_saves_session_id_to_history():
          patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
          patch('app.generate_text', return_value='Answer'), \
          patch('app.get_cached_response', return_value=(None, None)), \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
          patch('app.cache_response'):
 
         import app as flask_app

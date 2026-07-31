@@ -26,8 +26,6 @@ from groq import Groq
 from openai import OpenAI
 from google import genai
 from google.genai import types as genai_types
-from fastembed import TextEmbedding
-from fastembed.rerank.cross_encoder import TextCrossEncoder
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, PayloadSchemaType
 from rank_bm25 import BM25Okapi
@@ -104,19 +102,43 @@ _reranker_model = None
 _model_lock = threading.Lock()
 
 
+# Embedding/reranker ONNX models are hosted on a separate model_service dyno
+# (own memory budget) instead of loading in-process here — loading both in this
+# process was OOM-crashing the 512MB Render web dyno on every /ask request.
+MODEL_SERVICE_URL = (os.getenv('MODEL_SERVICE_URL') or '').rstrip('/')
+MODEL_SERVICE_SECRET = os.getenv('MODEL_SERVICE_SECRET', '')
+
+
+class _RemoteEmbedder:
+    def embed(self, texts):
+        resp = requests.post(
+            f'{MODEL_SERVICE_URL}/embed',
+            json={'texts': list(texts)},
+            headers={'X-Service-Secret': MODEL_SERVICE_SECRET},
+            timeout=60
+        )
+        resp.raise_for_status()
+        return [np.array(v) for v in resp.json()['vectors']]
+
+
+class _RemoteReranker:
+    def rerank(self, query, documents):
+        resp = requests.post(
+            f'{MODEL_SERVICE_URL}/rerank',
+            json={'query': query, 'documents': list(documents)},
+            headers={'X-Service-Secret': MODEL_SERVICE_SECRET},
+            timeout=60
+        )
+        resp.raise_for_status()
+        return resp.json()['scores']
+
+
 def get_embedding_model():
     global _embedding_model
     if _embedding_model is None:
         with _model_lock:
             if _embedding_model is None:
-                logging.info("Loading embedding model via fastembed...")
-                # threads=1: caps onnxruntime's intra-op thread pool/arena allocation,
-                # which otherwise scales with CPU count and can exceed the 512MB dyno.
-                _embedding_model = TextEmbedding(
-                    model_name='sentence-transformers/all-MiniLM-L6-v2',
-                    cache_dir=os.getenv('FASTEMBED_CACHE_PATH', None),
-                    threads=1
-                )
+                _embedding_model = _RemoteEmbedder()
     return _embedding_model
 
 
@@ -125,12 +147,7 @@ def get_reranker_model():
     if _reranker_model is None:
         with _model_lock:
             if _reranker_model is None:
-                logging.info("Loading reranker via fastembed...")
-                _reranker_model = TextCrossEncoder(
-                    model_name='Xenova/ms-marco-MiniLM-L-6-v2',
-                    cache_dir=os.getenv('FASTEMBED_CACHE_PATH', None),
-                    threads=1
-                )
+                _reranker_model = _RemoteReranker()
     return _reranker_model
 
 

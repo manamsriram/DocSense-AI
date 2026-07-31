@@ -1,13 +1,13 @@
 {
   "summary": {
     "num_cases": 35,
-    "failures": 32,
-    "correctness": 0.002197802197802198,
+    "failures": 35,
+    "correctness": 0.0,
     "groundedness": 0.0,
     "citation_quality": 0.0,
     "completeness": 0.0,
-    "latency_sec": 38.40860994656881,
-    "weighted_rag_score": 0.0008791208791208791
+    "latency_sec": 0.0,
+    "weighted_rag_score": 0.0
   },
   "results": [
     {
@@ -21,7 +21,7 @@
         "type": "lookup",
         "difficulty": "easy"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "502 Server Error: Bad Gateway for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -42,7 +42,7 @@
         "type": "table",
         "difficulty": "easy"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "502 Server Error: Bad Gateway for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -63,7 +63,7 @@
         "type": "comparison",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "502 Server Error: Bad Gateway for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -84,7 +84,7 @@
         "type": "table",
         "difficulty": "easy"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "502 Server Error: Bad Gateway for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -105,7 +105,7 @@
         "type": "table",
         "difficulty": "easy"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "502 Server Error: Bad Gateway for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -126,7 +126,7 @@
         "type": "lookup",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -147,7 +147,7 @@
         "type": "lookup",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -168,7 +168,7 @@
         "type": "lookup",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -189,7 +189,7 @@
         "type": "table",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -210,7 +210,7 @@
         "type": "table",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -231,7 +231,7 @@
         "type": "table",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -252,7 +252,7 @@
         "type": "lookup",
         "difficulty": "hard"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -273,7 +273,7 @@
         "type": "table",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -294,7 +294,7 @@
         "type": "table",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -315,7 +315,7 @@
         "type": "table",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -336,7 +336,7 @@
         "type": "table",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -357,7 +357,7 @@
         "type": "acronym",
         "difficulty": "easy"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -378,7 +378,7 @@
         "type": "acronym",
         "difficulty": "easy"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -399,7 +399,7 @@
         "type": "acronym",
         "difficulty": "easy"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -413,19 +413,20 @@
       "id": "q20_amp_asset_buckets_list",
       "question": "In the FY21\u201323 report, what are the four AMP Asset Inventory Assessment buckets shown in the mission/condition relevance matrix?",
       "reference_answer": "Invest, Sustain, Outgrant/Repurpose, and Divest",
-      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "answer": "",
       "sources": [],
       "metadata": {
         "doc": "nasa_2023_triennial",
         "type": "multi-hop",
         "difficulty": "medium"
       },
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
         "citation_quality": 0.0,
         "completeness": 0.0,
-        "latency_sec": 77.03442716598511,
+        "latency_sec": null,
         "weighted_rag_score": 0.0
       }
     },
@@ -440,7 +441,7 @@
         "type": "lookup",
         "difficulty": "hard"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -461,7 +462,7 @@
         "type": "policy",
         "difficulty": "hard"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -482,7 +483,7 @@
         "type": "lookup",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -503,7 +504,7 @@
         "type": "multi-hop",
         "difficulty": "hard"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -524,7 +525,7 @@
         "type": "timeline",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -545,7 +546,7 @@
         "type": "lookup",
         "difficulty": "easy"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -559,19 +560,20 @@
       "id": "irm2023_02",
       "question": "What is Iron Mountain's common stock ticker symbol and on which exchange is it listed?",
       "reference_answer": "IRM, New York Stock Exchange (NYSE)",
-      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "answer": "",
       "sources": [],
       "metadata": {
         "doc": "iron_mountain_2023",
         "type": "lookup",
         "difficulty": "easy"
       },
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
         "citation_quality": 0.0,
         "completeness": 0.0,
-        "latency_sec": 20.645068883895874,
+        "latency_sec": null,
         "weighted_rag_score": 0.0
       }
     },
@@ -586,7 +588,7 @@
         "type": "table",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -607,7 +609,7 @@
         "type": "table",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -628,7 +630,7 @@
         "type": "acronym",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -649,7 +651,7 @@
         "type": "policy",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -663,20 +665,21 @@
       "id": "irm2023_07",
       "question": "When was Project Matterhorn announced, and how much did Iron Mountain expect to incur annually in related costs from 2023 through 2025?",
       "reference_answer": "Announced in September 2022; approximately $150.0 million in costs annually from 2023 through 2025",
-      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "answer": "",
       "sources": [],
       "metadata": {
         "doc": "iron_mountain_2023",
         "type": "timeline",
         "difficulty": "easy"
       },
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
-        "correctness": 0.07692307692307693,
+        "correctness": 0.0,
         "groundedness": 0.0,
         "citation_quality": 0.0,
         "completeness": 0.0,
-        "latency_sec": 17.54633378982544,
-        "weighted_rag_score": 0.03076923076923077
+        "latency_sec": null,
+        "weighted_rag_score": 0.0
       }
     },
     {
@@ -690,7 +693,7 @@
         "type": "multi-hop",
         "difficulty": "hard"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -711,7 +714,7 @@
         "type": "comparison",
         "difficulty": "hard"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
@@ -732,7 +735,7 @@
         "type": "comparison",
         "difficulty": "medium"
       },
-      "error": "API error: An error occurred, please try again",
+      "error": "503 Server Error: Service Unavailable for url: https://docsense-ai-7k4b.onrender.com/ask",
       "metrics": {
         "correctness": 0.0,
         "groundedness": 0.0,
