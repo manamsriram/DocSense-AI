@@ -1,3 +1,4 @@
+import gc
 import os
 from functools import wraps
 
@@ -54,6 +55,7 @@ def embed():
         return jsonify({'error': f'this instance is role={MODEL_ROLE}, not embed'}), 404
     texts = request.get_json(force=True)['texts']
     vectors = [v.tolist() for v in _embedding_model.embed(texts)]
+    gc.collect()
     return jsonify({'vectors': vectors})
 
 
@@ -66,6 +68,7 @@ def rerank():
     query = body['query']
     documents = body['documents']
     scores = [float(s) for s in _reranker_model.rerank(query, documents)]
+    gc.collect()
     return jsonify({'scores': scores})
 
 
