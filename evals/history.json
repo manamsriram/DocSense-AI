@@ -28,5 +28,35 @@
     "completeness": 0.0,
     "latency_sec": 0.0,
     "weighted_rag_score": 0.0
+  },
+  {
+    "num_cases": 35,
+    "failures": 32,
+    "correctness": 0.002197802197802198,
+    "groundedness": 0.0,
+    "citation_quality": 0.0,
+    "completeness": 0.0,
+    "latency_sec": 0.7195067405700684,
+    "weighted_rag_score": 0.0008791208791208791
+  },
+  {
+    "num_cases": 35,
+    "failures": 2,
+    "correctness": 0.3826062321590386,
+    "groundedness": 0.06676811324213547,
+    "citation_quality": 0.9428571428571428,
+    "completeness": 0.30952380952380953,
+    "latency_sec": 20.03425062786449,
+    "weighted_rag_score": 0.37306785450748264
+  },
+  {
+    "num_cases": 35,
+    "failures": 0,
+    "correctness": 0.4283205178733243,
+    "groundedness": 0.07306219769619358,
+    "citation_quality": 1.0,
+    "completeness": 0.3380952380952381,
+    "latency_sec": 0.5886472974504743,
+    "weighted_rag_score": 0.4072128041924257
   }
 ]
