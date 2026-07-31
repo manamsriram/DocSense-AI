@@ -1,57 +1,44 @@
 # DocSense-AI Claude Harness
 
 ## Project
-DocSense-AI is a Flask-based document intelligence platform that answers questions over uploaded PDFs using hybrid retrieval, graph expansion, reranking, CRAG-style correction, and citation-grounded answer generation.
+DocSense-AI is a Flask-based RAG application for question answering over uploaded PDFs with retrieval, reranking, graph expansion, and citation-grounded answers.
 
 ## Goal
-Improve end-to-end RAG quality using a repeatable evaluation harness.
+Improve whole-system RAG quality on a fixed evaluation corpus.
 
-## Success metric
-Primary metric: weighted_rag_score
-
-weighted_rag_score =
-0.40 * answer_correctness +
-0.25 * groundedness +
-0.20 * retrieval_relevance +
-0.10 * citation_quality +
-0.05 * completeness
-
-Regression gates:
-- hallucination_rate must not worsen by more than 0.03
-- latency_p95 must not worsen by more than 20%
-- failing test count must not increase
-- citation_presence_rate must not decrease
-
-## Commands
-Install app deps:
-`pip install -r requirements.txt`
-
-Install eval deps:
-`pip install -r requirements-eval.txt`
-
-Run tests:
-`pytest -q`
-
-Run eval:
+## Verification command
 `python evals/run_eval.py`
 
-## Architecture notes
-- Main app entrypoint: `app.py`
-- Online query endpoint: `POST /ask`
-- Existing eval assets: `eval_dataset.json`, `eval_ragas.py`
-- RAG system includes dense retrieval, BM25, RRF fusion, graph expansion, reranking, and CRAG-style correction
+## Primary metric
+`weighted_rag_score`
+
+## Secondary metrics
+- correctness
+- groundedness
+- citation_quality
+- completeness
+- latency_sec
+- failures
+
+## Regression gates
+Reject a change if:
+- the eval script fails
+- failures increase materially
+- citation quality decreases
+- groundedness decreases significantly
+- latency regresses unacceptably
+- app tests fail
 
 ## Rules
 - Make one atomic change per iteration.
-- Always run `python evals/run_eval.py` after each change.
-- Keep a change only if the primary metric improves and regression gates pass.
+- Run the verification command after every change.
+- Keep only measured improvements.
 - Revert losing changes cleanly.
-- Do not silently modify the benchmark.
-- Do not remove difficult eval cases to improve scores.
+- Do not silently change the benchmark.
+- Do not remove hard examples.
 - Prefer minimal diffs.
-- Do not make destructive changes without confirmation.
 
-## Output format for each iteration
+## Standard iteration output
 1. Current best score
 2. Hypothesis
 3. Files changed

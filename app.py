@@ -21,6 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from groq import Groq
+from openai import OpenAI
 from google import genai
 from google.genai import types as genai_types
 from fastembed import TextEmbedding
@@ -39,7 +40,21 @@ app = Flask(__name__, static_url_path='', static_folder='.')
 # LLM via Groq (free tier)
 groq_client = Groq(api_key=os.getenv('GROQ_API_KEY'))
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
-GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'meta-llama/llama-4-scout-17b-16e-instruct')
+GROQ_VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'qwen/qwen3.6-27b')
+# High-volume graph-triple extraction during ingestion runs on OpenRouter instead
+# of Groq — the 70B Groq model's tight TPM/RPM limits caused 429 storms across the
+# many sequential batches in a single upload, blowing past the HTTP gateway timeout.
+_openrouter_api_key = os.getenv('OPENROUTER_API_KEY')
+openrouter_client = OpenAI(
+    api_key=_openrouter_api_key, base_url='https://openrouter.ai/api/v1'
+) if _openrouter_api_key else None
+GRAPH_MODEL = os.getenv('GRAPH_MODEL', 'google/gemini-2.5-flash-lite')
+# Primary model for final answer generation, routed through OpenRouter. Groq's
+# GROQ_MODEL is deprecated (see console.groq.com/docs/deprecations) and both Groq's
+# daily token quota and Gemini's free-tier daily quota can be exhausted independently,
+# so OpenRouter — a third, separately-billed provider — goes first; Groq/Gemini remain
+# as fallbacks below.
+ANSWER_MODEL = os.getenv('ANSWER_MODEL', 'google/gemini-2.5-flash')
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
@@ -112,7 +127,7 @@ if not qdrant.collection_exists(COLLECTION):
         collection_name=COLLECTION,
         vectors_config=VectorParams(size=384, distance=Distance.COSINE)
     )
-    for field in ('source', 'user_id'):
+    for field in ('source', 'user_id', 'org_id'):
         qdrant.create_payload_index(
             collection_name=COLLECTION,
             field_name=field,
@@ -120,15 +135,17 @@ if not qdrant.collection_exists(COLLECTION):
         )
     logging.info(f"Created Qdrant collection: {COLLECTION}")
 else:
-    # Ensure user_id index exists on pre-existing collection
-    try:
-        qdrant.create_payload_index(
-            collection_name=COLLECTION,
-            field_name='user_id',
-            field_schema=PayloadSchemaType.KEYWORD
-        )
-    except Exception:
-        pass
+    # Ensure user_id/org_id indexes exist on pre-existing collections (e.g. those
+    # created before the org-tier migration added org_id-filtered scrolls).
+    for field in ('user_id', 'org_id'):
+        try:
+            qdrant.create_payload_index(
+                collection_name=COLLECTION,
+                field_name=field,
+                field_schema=PayloadSchemaType.KEYWORD
+            )
+        except Exception:
+            pass
 
 # Sentence-boundary-aware chunker with overlap
 text_splitter = RecursiveCharacterTextSplitter(
@@ -747,13 +764,13 @@ def hybrid_search(query, user_id, top_k=20):
 
     # Dense retrieval via Qdrant, filtered to this org
     query_vec = list(get_embedding_model().embed([query]))[0].tolist()
-    hits = qdrant.search(
+    hits = qdrant.query_points(
         collection_name=COLLECTION,
-        query_vector=query_vec,
+        query=query_vec,
         query_filter=Filter(must=[FieldCondition(key='org_id', match=MatchValue(value=org_id))]),
         limit=min(top_k, count),
         with_payload=True
-    )
+    ).points
     dense_ids = [str(h.id) for h in hits]
     dense_doc_map = {str(h.id): h.payload.get('text', '') for h in hits}
 
@@ -815,7 +832,7 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
         f'[{i}] {text[:600]}' for i, (_, _, text) in enumerate(batch_chunks)
     )
     try:
-        raw = _call_groq_helper(
+        raw = _call_openrouter_helper(
             _GRAPH_EXTRACT_PROMPT.format(chunks=formatted), max_tokens=700
         )
         results = _parse_llm_json(raw)
@@ -1342,11 +1359,27 @@ def _parse_llm_json(content):
     raise ValueError(f"No JSON found in LLM output: {content[:200]}")
 
 
-def _call_groq_helper(user_content, max_tokens, temperature=0.0):
+def _call_openrouter_helper(user_content, max_tokens, temperature=0.0, model=GRAPH_MODEL):
+    """Single-turn OpenRouter call. Falls back to Groq/Gemini if unconfigured or failing."""
+    if openrouter_client is not None:
+        try:
+            resp = openrouter_client.chat.completions.create(
+                model=model,
+                messages=[{'role': 'user', 'content': user_content}],
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            logging.warning(f"OpenRouter helper failed ({e}), falling back to Groq/Gemini")
+    return _call_groq_helper(user_content, max_tokens, temperature=temperature)
+
+
+def _call_groq_helper(user_content, max_tokens, temperature=0.0, model=None):
     """Single-turn Groq call with Gemini fallback. Returns raw text or raises."""
     try:
         resp = groq_client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model or GROQ_MODEL,
             messages=[{'role': 'user', 'content': user_content}],
             max_tokens=max_tokens,
             temperature=temperature,
@@ -1427,6 +1460,18 @@ def generate_text(prompt, conversation_history=None):
         messages.append({'role': 'user', 'content': turn['question']})
         messages.append({'role': 'assistant', 'content': turn['answer']})
     messages.append({'role': 'user', 'content': prompt})
+
+    if openrouter_client is not None:
+        try:
+            response = openrouter_client.chat.completions.create(
+                model=ANSWER_MODEL,
+                messages=messages,
+                max_tokens=750,
+                temperature=0.2
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logging.warning(f"[eval] openrouter_fallback=true reason={e}")
 
     try:
         response = groq_client.chat.completions.create(

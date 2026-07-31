@@ -4,6 +4,7 @@ redis==5.2.1
 pymupdf==1.25.5
 python-dotenv==1.2.2
 groq==0.13.0
+openai>=1.50.0
 fastembed==0.8.0
 qdrant-client==1.18.0
 rank-bm25==0.2.2
