@@ -1,5 +1,6 @@
 import gc
 import os
+import threading
 from functools import wraps
 
 from flask import Flask, request, jsonify
@@ -61,6 +62,11 @@ def embed():
 
 RERANK_BATCH_SIZE = 6  # bounds peak ONNX arena size per call on a 512MB dyno
 
+# gthread lets a health-check thread answer while another thread reranks, but
+# two concurrent /rerank calls would each hold their own ONNX arena at once
+# and blow past 512MB — serialize actual inference, /health stays unguarded.
+_rerank_lock = threading.Lock()
+
 
 @app.route('/rerank', methods=['POST'])
 @require_secret
@@ -71,10 +77,11 @@ def rerank():
     query = body['query']
     documents = body['documents']
     scores = []
-    for i in range(0, len(documents), RERANK_BATCH_SIZE):
-        batch = documents[i:i + RERANK_BATCH_SIZE]
-        scores.extend(float(s) for s in _reranker_model.rerank(query, batch))
-        gc.collect()
+    with _rerank_lock:
+        for i in range(0, len(documents), RERANK_BATCH_SIZE):
+            batch = documents[i:i + RERANK_BATCH_SIZE]
+            scores.extend(float(s) for s in _reranker_model.rerank(query, batch))
+            gc.collect()
     return jsonify({'scores': scores})
 
 
