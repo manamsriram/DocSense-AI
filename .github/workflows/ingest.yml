@@ -4,6 +4,9 @@ on:
   repository_dispatch:
     types: [ingest_pdf]
 
+permissions:
+  contents: read
+
 jobs:
   ingest:
     runs-on: ubuntu-latest

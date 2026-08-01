@@ -11,7 +11,10 @@ try {
 document.addEventListener('alpine:init', () => {
   Alpine.data('docsenseApp', () => ({
     // Auth
-    authToken: localStorage.getItem('sb_token') || null,
+    // Session lives in Supabase's own client-side store; we only track
+    // whether a session exists, never the raw token (avoids clear-text
+    // storage of the JWT — see js/clear-text-storage-of-sensitive-data).
+    authToken: false,
     authMode: 'login',
     authEmail: '',
     authPassword: '',
@@ -35,33 +38,33 @@ document.addEventListener('alpine:init', () => {
     currentSessionId: crypto.randomUUID(),
 
     async init() {
-      if (!this.authToken && _supabase && window.location.hash.includes('access_token')) {
-        const { data } = await _supabase.auth.getSession();
-        if (data?.session) {
-          this.authToken = data.session.access_token;
-          localStorage.setItem('sb_token', this.authToken);
-          window.history.replaceState(null, '', window.location.pathname);
-        }
+      if (!_supabase) return;
+      const { data } = await _supabase.auth.getSession();
+      if (!data?.session) return;
+      this.authToken = true;
+      if (window.location.hash.includes('access_token')) {
+        window.history.replaceState(null, '', window.location.pathname);
       }
-      if (!this.authToken) return;
       // Validate token by calling an auth-protected endpoint
       try {
-        const res = await fetch('/history', { headers: this.authHeaders() });
+        const res = await fetch('/history', { headers: await this.authHeaders() });
         if (res.status === 401) {
-          this.authToken = null;
-          localStorage.removeItem('sb_token');
+          this.authToken = false;
           return;
         }
-        const data = await res.json();
-        this.history = data.sessions || [];
+        const resData = await res.json();
+        this.history = resData.sessions || [];
       } catch (e) {
         console.error('Init check failed:', e);
       }
       await this.loadDocuments();
     },
 
-    authHeaders() {
-      return this.authToken ? { 'Authorization': `Bearer ${this.authToken}` } : {};
+    async authHeaders() {
+      if (!_supabase) return {};
+      const { data } = await _supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      return token ? { 'Authorization': `Bearer ${token}` } : {};
     },
 
     async login() {
@@ -74,8 +77,7 @@ document.addEventListener('alpine:init', () => {
           password: this.authPassword,
         });
         if (error) { this.authError = error.message; return; }
-        this.authToken = data.session.access_token;
-        localStorage.setItem('sb_token', this.authToken);
+        this.authToken = true;
         await this.loadDocuments();
         await this.loadHistory();
       } catch (e) {
@@ -99,8 +101,7 @@ document.addEventListener('alpine:init', () => {
         });
         if (error) { this.authError = error.message; return; }
         if (data.session) {
-          this.authToken = data.session.access_token;
-          localStorage.setItem('sb_token', this.authToken);
+          this.authToken = true;
           await this.loadDocuments();
           await this.loadHistory();
         } else {
@@ -115,8 +116,7 @@ document.addEventListener('alpine:init', () => {
 
     async logout() {
       if (_supabase) await _supabase.auth.signOut();
-      this.authToken = null;
-      localStorage.removeItem('sb_token');
+      this.authToken = false;
       this.messages = [];
       this.sources = [];
       this.documents = [];
@@ -133,7 +133,7 @@ document.addEventListener('alpine:init', () => {
 
     async loadHistory() {
       try {
-        const res = await fetch('/history', { headers: this.authHeaders() });
+        const res = await fetch('/history', { headers: await this.authHeaders() });
         if (!res.ok) return;
         const data = await res.json();
         this.history = data.sessions || [];
@@ -160,7 +160,7 @@ document.addEventListener('alpine:init', () => {
         if (!src.image_path || src.image_url) continue;
         try {
           const res = await fetch('/figure-url?path=' + encodeURIComponent(src.image_path), {
-            headers: this.authHeaders(),
+            headers: await this.authHeaders(),
           });
           if (!res.ok) continue;
           const data = await res.json();
@@ -179,7 +179,7 @@ document.addEventListener('alpine:init', () => {
 
     async loadDocuments() {
       try {
-        const res = await fetch('/documents', { headers: this.authHeaders() });
+        const res = await fetch('/documents', { headers: await this.authHeaders() });
         const data = await res.json();
         this.documents = data.documents || [];
         // Ingestion runs off-process on a CI runner; poll until it lands.
@@ -218,7 +218,7 @@ document.addEventListener('alpine:init', () => {
       try {
         const res = await fetch('/upload', {
           method: 'POST',
-          headers: this.authHeaders(),
+          headers: await this.authHeaders(),
           body: formData,
         });
         const data = await res.json();
@@ -257,7 +257,7 @@ document.addEventListener('alpine:init', () => {
       try {
         const res = await fetch('/ask', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...this.authHeaders() },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...(await this.authHeaders()) },
           body: 'question=' + encodeURIComponent(q) + '&session_id=' + encodeURIComponent(this.currentSessionId),
         });
 
