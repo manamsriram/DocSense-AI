@@ -112,14 +112,18 @@ MODEL_SERVICE_SECRET = os.getenv('MODEL_SERVICE_SECRET', '')
 
 
 def _post_with_retry(url, payload, attempts=3):
-    """POST to a model_service endpoint, retrying transient 502/503s.
+    """POST to a model_service endpoint, retrying transient 429/502/503s.
 
     model_service runs a single gunicorn worker (--workers 1) that gets
     periodically recycled (--max-requests) to bound ONNX arena growth on a
     512MB dyno. With no second worker to take over, every recycle has a
     brief window where the dyno returns 502/503 to anyone mid-request —
     expected and transient, not a real failure, so retry past it instead of
-    failing the whole ingest job on one unlucky request.
+    failing the whole ingest job on one unlucky request. Under sustained
+    concurrent agentic traffic (CRAG issues several rerank calls per
+    question), the same overload also surfaces as 429 once a caller already
+    fell back to ask_file after an earlier 502/503 — retry that too instead
+    of letting it fall through to /ask's catch-all as a generic failure.
     """
     last_exc = None
     for attempt in range(attempts):
@@ -129,7 +133,7 @@ def _post_with_retry(url, payload, attempts=3):
                 headers={'X-Service-Secret': MODEL_SERVICE_SECRET},
                 timeout=60
             )
-            if resp.status_code in (502, 503) and attempt < attempts - 1:
+            if resp.status_code in (429, 502, 503) and attempt < attempts - 1:
                 time.sleep(2 ** attempt)
                 continue
             resp.raise_for_status()

@@ -58,5 +58,16 @@
     "completeness": 0.3380952380952381,
     "latency_sec": 0.5886472974504743,
     "weighted_rag_score": 0.4072128041924257
+  },
+  {
+    "num_cases": 35,
+    "failures": 4,
+    "correctness": 0.3009485449077161,
+    "groundedness": 0.41037500770591756,
+    "citation_quality": 0.8857142857142857,
+    "completeness": 0.2904761904761905,
+    "retrieval_recall": 0.3761904761904762,
+    "latency_sec": 20.140288322202622,
+    "weighted_rag_score": 0.4139255508419468
   }
 ]
