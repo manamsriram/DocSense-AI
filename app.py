@@ -1475,7 +1475,15 @@ def _call_groq_helper(user_content, max_tokens, temperature=0.0, model=None):
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        return resp.choices[0].message.content.strip()
+        content = (resp.choices[0].message.content or '').strip()
+        # gpt-oss-120b is a reasoning model — on a tight max_tokens budget it can
+        # spend the whole budget on hidden reasoning tokens and return empty
+        # visible content with no exception (same failure mode fixed in
+        # generate_text() for q15/q16). Treat that as a failure, not a result,
+        # so we fall through to Gemini instead of handing callers "".
+        if not content:
+            raise RuntimeError(f"Groq returned empty content (finish_reason={resp.choices[0].finish_reason})")
+        return content
     except Exception as e:
         logging.warning(f"Groq helper failed ({e}), trying Gemini")
     if not _gemini_client:
