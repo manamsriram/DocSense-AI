@@ -32,11 +32,12 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
-          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
-          GROQ_VISION_MODEL: ${{ vars.GROQ_VISION_MODEL }}
-          GRAPH_MODEL: ${{ vars.GRAPH_MODEL }}
-          ANSWER_MODEL: ${{ vars.ANSWER_MODEL }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          # GROQ_MODEL/GROQ_VISION_MODEL/GRAPH_MODEL/ANSWER_MODEL/GEMINI_MODEL
+          # deliberately omitted: no GH Actions repo variables were ever
+          # created for these, so `${{ vars.X }}` resolved to an empty string
+          # (not absent) and silently overrode app.py's sensible in-code
+          # defaults with "" — surfaced as Groq vision 404s with model=``.
+          # Falling through to the code defaults instead.
           # Never interpolate client_payload into `run:` directly — it is
           # attacker-controllable and would be shell-injected.
           STORAGE_PATH: ${{ github.event.client_payload.storage_path }}
