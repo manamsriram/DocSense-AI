@@ -1532,7 +1532,20 @@ def generate_text(prompt, conversation_history=None):
                 max_tokens=750,
                 temperature=0.2
             )
-            return response.choices[0].message.content.strip()
+            content = response.choices[0].message.content.strip()
+            finish_reason = response.choices[0].finish_reason
+            if not content:
+                # A reasoning-capable model (e.g. gemini-2.5-flash) can spend its
+                # entire max_tokens budget on internal thinking and return an
+                # empty visible answer with no exception raised — this must be
+                # treated as a failure so the Groq/Gemini fallback below runs,
+                # not returned to the user as a blank "successful" response.
+                logging.warning(
+                    f"[eval] openrouter_empty_content=true finish_reason={finish_reason} "
+                    f"model={ANSWER_MODEL}"
+                )
+            else:
+                return content
         except Exception as e:
             logging.warning(f"[eval] openrouter_fallback=true reason={e}")
 
@@ -1543,7 +1556,14 @@ def generate_text(prompt, conversation_history=None):
             max_tokens=750,
             temperature=0.2
         )
-        return response.choices[0].message.content.strip()
+        content = response.choices[0].message.content.strip()
+        if not content:
+            logging.warning(
+                f"[eval] groq_empty_content=true finish_reason={response.choices[0].finish_reason} "
+                f"model={GROQ_MODEL}"
+            )
+        else:
+            return content
     except Exception as e:
         logging.warning(f"[eval] groq_fallback=true reason={e}")
 
@@ -1561,7 +1581,11 @@ def generate_text(prompt, conversation_history=None):
             config=genai_types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
         )
         response = chat.send_message(prompt)
-        return response.text.strip()
+        content = response.text.strip()
+        if not content:
+            logging.warning(f"[eval] gemini_empty_content=true model={GEMINI_MODEL}")
+            return None
+        return content
     except Exception as e:
         logging.error(f"Gemini fallback also failed: {e}", exc_info=True)
         return None
