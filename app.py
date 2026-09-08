@@ -1500,7 +1500,11 @@ def decompose_query(question):
     if len(question.split()) <= 10:
         return [question]
     try:
-        raw = _call_groq_helper(_DECOMPOSE_PROMPT.format(question=question), max_tokens=200)
+        # gpt-oss-120b is a reasoning model — it spends tokens on hidden chain-of-
+        # thought before emitting visible output, so a 200-token budget routinely
+        # truncated (finish_reason=length) before the JSON was written, silently
+        # falling back to Gemini every time. 600 gives the reasoning room to finish.
+        raw = _call_groq_helper(_DECOMPOSE_PROMPT.format(question=question), max_tokens=600)
         sub_queries = _parse_llm_json(raw)
         if isinstance(sub_queries, list) and all(isinstance(q, str) for q in sub_queries):
             result = [q.strip() for q in sub_queries[:3] if q.strip()]
@@ -1521,7 +1525,10 @@ def grade_chunks(query, chunks):
         return [], []
     formatted = '\n'.join(f'[{i}] {text[:300]}' for i, text in enumerate(chunks))
     try:
-        raw = _call_groq_helper(_GRADE_PROMPT.format(query=query, chunks=formatted), max_tokens=150)
+        # Same reasoning-token truncation as decompose_query above — 150 was too
+        # tight for gpt-oss-120b's hidden chain-of-thought to finish before the
+        # visible JSON, so this routinely hit finish_reason=length.
+        raw = _call_groq_helper(_GRADE_PROMPT.format(query=query, chunks=formatted), max_tokens=600)
         grades = _parse_llm_json(raw)
         relevant_indices = {int(i) for i in grades.get('relevant', [])}
         relevant = [chunks[i] for i in relevant_indices if i < len(chunks)]
