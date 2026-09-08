@@ -25,6 +25,9 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          EMBED_SERVICE_URL: ${{ secrets.EMBED_SERVICE_URL }}
+          RERANK_SERVICE_URL: ${{ secrets.RERANK_SERVICE_URL }}
+          MODEL_SERVICE_SECRET: ${{ secrets.MODEL_SERVICE_SECRET }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
