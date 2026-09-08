@@ -49,14 +49,28 @@ def health():
     return jsonify({'status': 'ok', 'role': MODEL_ROLE}), 200
 
 
+EMBED_BATCH_SIZE = 16  # bounds peak ONNX arena size per call on a 512MB dyno
+
+# gthread lets a health-check thread answer while another thread embeds, but
+# two concurrent /embed calls would each hold their own ONNX arena at once
+# and blow past 512MB — serialize actual inference, /health stays unguarded.
+_embed_lock = threading.Lock()
+
+
 @app.route('/embed', methods=['POST'])
 @require_secret
 def embed():
     if _embedding_model is None:
         return jsonify({'error': f'this instance is role={MODEL_ROLE}, not embed'}), 404
     texts = request.get_json(force=True)['texts']
-    vectors = [v.tolist() for v in _embedding_model.embed(texts)]
-    gc.collect()
+    vectors = []
+    with _embed_lock:
+        for batch_num, i in enumerate(range(0, len(texts), EMBED_BATCH_SIZE)):
+            batch = texts[i:i + EMBED_BATCH_SIZE]
+            vectors.extend(v.tolist() for v in _embedding_model.embed(batch))
+            if batch_num % 2 == 1:
+                gc.collect()
+        gc.collect()
     return jsonify({'vectors': vectors})
 
 
