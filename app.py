@@ -421,7 +421,13 @@ MAX_VISION_CALLS_PER_DOC = 20            # rate-limit guard for large uploads
 GRAPH_BATCH_SIZE = 4
 MAX_GRAPH_BATCHES_PER_DOC = 50
 MAX_GRAPH_NEIGHBORS = 10
-INDEX_FLUSH_CHUNK_SIZE = 200   # embed+upsert every N chunks instead of buffering the whole PDF
+INDEX_FLUSH_CHUNK_SIZE = 40   # embed+upsert every N chunks instead of buffering the whole PDF
+# 200 sent the whole batch through /embed in one HTTP call; on the 512MB
+# model_service dyno, sequential sub-batching to avoid OOM (see
+# model_service/service.py EMBED_BATCH_SIZE) pushed a 200-chunk call past
+# Render's platform gateway timeout (~60s), returning 502 regardless of
+# memory. Smaller flush batches keep each single /embed round-trip well
+# under that ceiling; more chunks just means more flush() calls per doc.
 
 _FIGURE_CAPTION_PROMPT = (
     'Describe this figure from a document in 2-3 sentences for search indexing. '
