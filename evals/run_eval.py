@@ -66,6 +66,17 @@ def contains_required_facts(answer, must_include):
     hits = sum(1 for item in must_include if normalize(item) in answer_n)
     return hits / len(must_include)
 
+def retrieval_recall(sources, must_include):
+    """Fraction of must_include facts present anywhere in the retrieved chunk
+    text. Unlike completeness (checked against the final answer), this is
+    generation-independent — it isolates whether embed+rerank ever surfaced
+    the right chunk, regardless of what the LLM did with it afterward."""
+    if not must_include:
+        return 1.0
+    src_n = normalize(source_text_blob(sources))
+    hits = sum(1 for item in must_include if normalize(item) in src_n)
+    return hits / len(must_include)
+
 def citation_presence_score(sources):
     return 1.0 if isinstance(sources, list) and len(sources) > 0 else 0.0
 
@@ -82,7 +93,11 @@ def groundedness_proxy(answer, sources):
     src_text = source_text_blob(sources)
     if not src_text.strip():
         return 0.0
-    return overlap_score(answer, src_text)
+    # Fraction of the answer's tokens found in the retrieved sources — not the
+    # reverse. Dividing by the source-text token count (previous behavior)
+    # caps the score near zero for any short answer against a multi-chunk
+    # source blob, regardless of how well-grounded the answer actually is.
+    return overlap_score(src_text, answer)
 
 def correctness_proxy(answer, reference_answer):
     return overlap_score(answer, reference_answer)
@@ -107,6 +122,7 @@ def run():
         "groundedness": [],
         "citation_quality": [],
         "completeness": [],
+        "retrieval_recall": [],
         "latency_sec": [],
         "weighted_rag_score": [],
         "failures": 0
@@ -129,6 +145,7 @@ def run():
             groundedness = groundedness_proxy(answer, sources)
             citation_quality = citation_presence_score(sources)
             completeness = contains_required_facts(answer, must_include)
+            recall = retrieval_recall(sources, must_include)
             total = weighted_score(correctness, groundedness, citation_quality, completeness)
 
             per_case.append({
@@ -143,6 +160,7 @@ def run():
                     "groundedness": groundedness,
                     "citation_quality": citation_quality,
                     "completeness": completeness,
+                    "retrieval_recall": recall,
                     "latency_sec": latency_sec,
                     "weighted_rag_score": total
                 }
@@ -152,6 +170,7 @@ def run():
             agg["groundedness"].append(groundedness)
             agg["citation_quality"].append(citation_quality)
             agg["completeness"].append(completeness)
+            agg["retrieval_recall"].append(recall)
             agg["latency_sec"].append(latency_sec)
             agg["weighted_rag_score"].append(total)
 
@@ -170,6 +189,7 @@ def run():
                     "groundedness": 0.0,
                     "citation_quality": 0.0,
                     "completeness": 0.0,
+                    "retrieval_recall": 0.0,
                     "latency_sec": None,
                     "weighted_rag_score": 0.0
                 }
@@ -178,6 +198,7 @@ def run():
             agg["groundedness"].append(0.0)
             agg["citation_quality"].append(0.0)
             agg["completeness"].append(0.0)
+            agg["retrieval_recall"].append(0.0)
             agg["weighted_rag_score"].append(0.0)
 
     summary = {
@@ -187,6 +208,7 @@ def run():
         "groundedness": safe_mean(agg["groundedness"]),
         "citation_quality": safe_mean(agg["citation_quality"]),
         "completeness": safe_mean(agg["completeness"]),
+        "retrieval_recall": safe_mean(agg["retrieval_recall"]),
         "latency_sec": safe_mean(agg["latency_sec"]),
         "weighted_rag_score": safe_mean(agg["weighted_rag_score"])
     }
