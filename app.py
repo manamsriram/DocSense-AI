@@ -111,27 +111,45 @@ RERANK_SERVICE_URL = (os.getenv('RERANK_SERVICE_URL') or '').rstrip('/')
 MODEL_SERVICE_SECRET = os.getenv('MODEL_SERVICE_SECRET', '')
 
 
+def _post_with_retry(url, payload, attempts=3):
+    """POST to a model_service endpoint, retrying transient 502/503s.
+
+    model_service runs a single gunicorn worker (--workers 1) that gets
+    periodically recycled (--max-requests) to bound ONNX arena growth on a
+    512MB dyno. With no second worker to take over, every recycle has a
+    brief window where the dyno returns 502/503 to anyone mid-request —
+    expected and transient, not a real failure, so retry past it instead of
+    failing the whole ingest job on one unlucky request.
+    """
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            resp = requests.post(
+                url, json=payload,
+                headers={'X-Service-Secret': MODEL_SERVICE_SECRET},
+                timeout=60
+            )
+            if resp.status_code in (502, 503) and attempt < attempts - 1:
+                time.sleep(2 ** attempt)
+                continue
+            resp.raise_for_status()
+            return resp
+        except requests.exceptions.RequestException as e:
+            last_exc = e
+            if attempt < attempts - 1:
+                time.sleep(2 ** attempt)
+    raise last_exc
+
+
 class _RemoteEmbedder:
     def embed(self, texts):
-        resp = requests.post(
-            f'{EMBED_SERVICE_URL}/embed',
-            json={'texts': list(texts)},
-            headers={'X-Service-Secret': MODEL_SERVICE_SECRET},
-            timeout=60
-        )
-        resp.raise_for_status()
+        resp = _post_with_retry(f'{EMBED_SERVICE_URL}/embed', {'texts': list(texts)})
         return [np.array(v) for v in resp.json()['vectors']]
 
 
 class _RemoteReranker:
     def rerank(self, query, documents):
-        resp = requests.post(
-            f'{RERANK_SERVICE_URL}/rerank',
-            json={'query': query, 'documents': list(documents)},
-            headers={'X-Service-Secret': MODEL_SERVICE_SECRET},
-            timeout=60
-        )
-        resp.raise_for_status()
+        resp = _post_with_retry(f'{RERANK_SERVICE_URL}/rerank', {'query': query, 'documents': list(documents)})
         return resp.json()['scores']
 
 
