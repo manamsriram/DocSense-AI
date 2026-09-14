@@ -895,7 +895,10 @@ def estimate_query_complexity(question, sub_query_count=1):
     e.g. "compare X and Y" is short but hard, a long single-fact question is easy."""
     is_complex = sub_query_count > 1 or bool(_COMPLEXITY_HINT_RE.search(question))
     if is_complex:
-        return {'top_k': 30, 'top_n': 8, 'synthesis_top_n': 8}
+        # top_n raised 8->15: the reranker routinely scores a table-of-contents
+        # or overview mention of a table above the table's actual data chunk,
+        # pushing the real answer past a top_n=8 cutoff (observed at rank 14).
+        return {'top_k': 30, 'top_n': 15, 'synthesis_top_n': 15}
     return {'top_k': 20, 'top_n': 5, 'synthesis_top_n': 6}
 
 
