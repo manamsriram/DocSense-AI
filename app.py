@@ -1585,7 +1585,10 @@ def grade_chunks(query, chunks):
     """
     if not chunks:
         return [], []
-    formatted = '\n'.join(f'[{i}] {text[:300]}' for i, text in enumerate(chunks))
+    # Table chunks run well past 300 chars (header + many data rows) — a
+    # truncated stub hides the specific row/total a query actually needs,
+    # so the grader marks a chunk irrelevant even when it holds the answer.
+    formatted = '\n'.join(f'[{i}] {text[:1200]}' for i, text in enumerate(chunks))
     try:
         # Same reasoning-token truncation as decompose_query above — 150 was too
         # tight for gpt-oss-120b's hidden chain-of-thought to finish before the
