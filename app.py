@@ -507,32 +507,78 @@ def _rows_to_markdown(rows):
     return '\n'.join(lines)
 
 
-def extract_page_tables(page):
-    """Detect tables via PyMuPDF's rule-based finder. Returns markdown strings.
-
-    Long tables are split into row groups with the header repeated so each
-    chunk stands alone for retrieval.
-    """
+def _detect_tables(page):
     try:
-        tabs = page.find_tables()
+        return page.find_tables()
     except Exception as e:
         logging.warning(f"find_tables failed on page {page.number + 1}: {e}")
-        return []
+        return None
+
+
+def _page_text_excluding_tables(page, table_bboxes):
+    """Plain page text with any detected table's region left out.
+
+    Without this, the generic prose splitter still chunks the table's raw
+    visual text into several short, header-only or mid-row fragments that
+    duplicate (and often out-rank, being shorter and title-heavy) the single
+    clean captioned table chunk from extract_page_tables — so the correct
+    chunk loses to its own noisy duplicates at retrieval time.
+    """
+    kept = []
+    for x0, y0, x1, y1, text, *_ in page.get_text('blocks'):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        if any(rect.intersects(tb) for tb in table_bboxes):
+            continue
+        kept.append(text)
+    return ''.join(kept)
+
+
+def extract_page_tables(page, tabs=None):
+    """Detect tables via PyMuPDF's rule-based finder. Returns (markdown_chunks, excluded_bboxes).
+
+    Long tables are split into row groups with the header repeated so each
+    chunk stands alone for retrieval. The nearby caption (e.g. "Table 2-1.
+    NASA Centers and Component Facilities") is prepended to every chunk —
+    without it, a chunk is just column headers and numbers with none of the
+    words a natural-language question would use, so retrieval never
+    surfaces it even when the data inside directly answers the question.
+    excluded_bboxes covers both the table and its caption, so the caller can
+    keep the generic prose splitter from also producing a bare, near-duplicate
+    caption-only chunk that (being short and title-heavy) can out-rank the
+    real data-bearing chunk at retrieval time.
+    """
+    if tabs is None:
+        tabs = _detect_tables(page)
+    if tabs is None:
+        return [], []
+    blocks = [b for b in page.get_text('blocks') if b[6] == 0]
     out = []
+    excluded_bboxes = []
     for tab in tabs.tables:
+        table_bbox = pymupdf.Rect(tab.bbox)
+        excluded_bboxes.append(table_bbox)
         rows = [r for r in tab.extract() if any(c not in (None, '') for c in r)]
         if len(rows) < 2 or max(len(r) for r in rows) < 2:
             continue
+        found = _find_caption(blocks, table_bbox)
+        caption = None
+        if found:
+            caption, caption_bbox = found
+            excluded_bboxes.append(caption_bbox)
         header, body = rows[0], rows[1:]
         for i in range(0, len(body), MAX_TABLE_ROWS_PER_CHUNK):
-            out.append(_rows_to_markdown([header] + body[i:i + MAX_TABLE_ROWS_PER_CHUNK]))
-    return out
+            md = _rows_to_markdown([header] + body[i:i + MAX_TABLE_ROWS_PER_CHUNK])
+            out.append(f"{caption}\n{md}" if caption else md)
+    return out, excluded_bboxes
 
 
 def _find_caption(blocks, img_rect):
     """Nearest horizontally-overlapping text block above/below an image.
 
     Blocks matching 'Figure N'-style patterns win over plain proximity.
+    Returns (text, bbox) so callers can also exclude the caption's own
+    region from generic prose extraction; existing callers that only want
+    the text can index [0].
     """
     candidates = []
     for x0, y0, x1, y1, text, *_ in blocks:
@@ -549,28 +595,33 @@ def _find_caption(blocks, img_rect):
             continue
         if gap > CAPTION_SEARCH_MARGIN_PT:
             continue
-        candidates.append((not CAPTION_RE.match(text), gap, text))
+        candidates.append((not CAPTION_RE.match(text), gap, text, pymupdf.Rect(x0, y0, x1, y1)))
     if not candidates:
         return None
-    candidates.sort()
-    return candidates[0][2]
+    candidates.sort(key=lambda c: c[:2])
+    return candidates[0][2], candidates[0][3]
 
 
 def extract_page_figures(page, vision_budget=None):
-    """Returns [(caption, png_bytes)] for page images worth indexing.
+    """Returns ([(caption, png_bytes)], excluded_bboxes) for page images worth indexing.
 
     Captions come from nearby text when available; otherwise a Groq vision
     call describes the figure, spending from vision_budget ({'remaining': N}).
     With no budget and no nearby text the figure is skipped — nothing to index.
+    excluded_bboxes covers caption blocks pulled from nearby text, so the
+    generic prose splitter doesn't also emit that same caption as a bare
+    duplicate chunk (harmless corpus bloat, not a data-loss bug like tables'
+    caption/body split, but still worth avoiding).
     """
     try:
         infos = page.get_image_info()
     except Exception as e:
         logging.warning(f"get_image_info failed on page {page.number + 1}: {e}")
-        return []
+        return [], []
     page_rect = page.rect
     blocks = [b for b in page.get_text('blocks') if b[6] == 0]
     figures = []
+    excluded_bboxes = []
     for info in infos:
         if len(figures) >= MAX_FIGURES_PER_PAGE:
             break
@@ -585,7 +636,10 @@ def extract_page_figures(page, vision_budget=None):
         except Exception as e:
             logging.warning(f"Figure render failed on page {page.number + 1}: {e}")
             continue
-        caption = _find_caption(blocks, rect)
+        found = _find_caption(blocks, rect)
+        caption = found[0] if found else None
+        if found:
+            excluded_bboxes.append(found[1])
         if not caption and vision_budget and vision_budget['remaining'] > 0:
             caption = describe_image_with_groq(png_bytes, _FIGURE_CAPTION_PROMPT)
             if caption:
@@ -593,7 +647,7 @@ def extract_page_figures(page, vision_budget=None):
         if not caption:
             continue
         figures.append((caption, png_bytes))
-    return figures
+    return figures, excluded_bboxes
 
 
 def _delete_stored_figures(figure_dir):
@@ -705,9 +759,17 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
         page = doc[page_num]
         pno = page_num + 1
 
-        page_text = preprocess(page.get_text('text'))
+        tabs = _detect_tables(page)
+        table_chunks, table_excluded_bboxes = extract_page_tables(page, tabs=tabs)
+        figures, figure_excluded_bboxes = extract_page_figures(page, vision_budget=vision_budget)
+        excluded_bboxes = table_excluded_bboxes + figure_excluded_bboxes
+        raw_text = _page_text_excluding_tables(page, excluded_bboxes) if excluded_bboxes else page.get_text('text')
+        page_text = preprocess(raw_text)
         chunk_type = 'text'
-        if not page_text and vision_budget['remaining'] > 0:
+        # A pure-table page can have empty page_text purely from table exclusion
+        # above, not because it lacks a text layer — check the unfiltered text
+        # before treating it as scanned, or every all-table page burns vision budget.
+        if not page_text and not page.get_text('text').strip() and vision_budget['remaining'] > 0:
             # No text layer — likely a scanned page; transcribe via Groq vision
             try:
                 pix = page.get_pixmap(dpi=SCANNED_PAGE_RENDER_DPI)
@@ -731,14 +793,14 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
                 points.append((point_id, pno, display_text, {'type': chunk_type}))
                 counts[chunk_type] += 1
 
-        for t_idx, table_md in enumerate(extract_page_tables(page)):
+        for t_idx, table_md in enumerate(table_chunks):
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{user_id}__{filename}__p{pno}__t{t_idx}"))
             display_text = f"[Page {pno}, Source: {filename}] [Table]\n{table_md}"
             embed_texts.append(table_md)
             points.append((point_id, pno, display_text, {'type': 'table'}))
             counts['table'] += 1
 
-        for f_idx, (caption, png_bytes) in enumerate(extract_page_figures(page, vision_budget=vision_budget)):
+        for f_idx, (caption, png_bytes) in enumerate(figures):
             image_path = f"{figure_dir}/p{pno}_f{f_idx}.png"
             extra = {'type': 'figure'}
             marker = ''
@@ -2145,6 +2207,75 @@ def health():
         'bm25_ready': _bm25_ready,
     }
     return jsonify(status), 200
+
+
+# ponytail: temporary diagnostic endpoint for the table-retrieval investigation,
+# remove once the reranker fix lands. Auth-scoped like /ask — only exposes a
+# user's own org's candidates/scores, nothing new.
+@app.route('/debug/retrieval', methods=['POST'])
+@require_auth
+def debug_retrieval():
+    question = request.form.get('question', '').strip()
+    top_k = int(request.form.get('top_k', 20))
+    if not question:
+        return jsonify({'error': 'No question provided'}), 400
+
+    user_id = g.user_id
+    candidates = hybrid_search(question, user_id, top_k=top_k)
+    if not candidates:
+        return jsonify({'candidates': [], 'reranked': []})
+
+    texts = [text for _, text in candidates]
+    scores = list(get_reranker_model().rerank(question, texts))
+    reranked = sorted(
+        [{'rank_score': _sigmoid(float(s)), 'text': t} for s, t in zip(scores, texts)],
+        key=lambda x: x['rank_score'], reverse=True
+    )
+    return jsonify({
+        'pre_rerank_order': [{'doc_id': doc_id, 'text': text} for doc_id, text in candidates],
+        'reranked': reranked
+    })
+
+
+# ponytail: temporary diagnostic endpoint, remove alongside /debug/retrieval.
+# Scrolls this user's org-scoped Qdrant points for a given source/page so we
+# can see everything actually stored, independent of hybrid_search ranking.
+@app.route('/debug/page_chunks', methods=['POST'])
+@require_auth
+def debug_page_chunks():
+    source = request.form.get('source', '').strip()
+    page = request.form.get('page', type=int)
+    if not source or page is None:
+        return jsonify({'error': 'source and page required'}), 400
+
+    org_id = get_or_create_org_for_user(g.user_id)
+    must = [
+        FieldCondition(key='org_id', match=MatchValue(value=org_id)),
+        FieldCondition(key='source', match=MatchValue(value=source)),
+    ]
+    # 'page' has no Qdrant payload index, so filter client-side after scrolling
+    # this source's points (no org has enough chunks per doc for this to matter).
+    all_points = []
+    offset = None
+    while True:
+        points, offset = qdrant.scroll(
+            collection_name=COLLECTION,
+            scroll_filter=Filter(must=must),
+            limit=200,
+            offset=offset,
+            with_payload=True,
+        )
+        all_points.extend(points)
+        if offset is None:
+            break
+    matched = [p for p in all_points if p.payload.get('page') == page]
+    return jsonify({
+        'count': len(matched),
+        'chunks': [
+            {'type': p.payload.get('type'), 'text': p.payload.get('text', '')}
+            for p in matched
+        ]
+    })
 
 
 @app.route('/ask', methods=['POST'])

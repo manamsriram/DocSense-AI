@@ -69,5 +69,39 @@
     "retrieval_recall": 0.3761904761904762,
     "latency_sec": 20.140288322202622,
     "weighted_rag_score": 0.4139255508419468
+  },
+  {
+    "num_cases": 35,
+    "failures": 35,
+    "correctness": 0.0,
+    "groundedness": 0.0,
+    "citation_quality": 0.0,
+    "completeness": 0.0,
+    "retrieval_recall": 0.0,
+    "latency_sec": 0.0,
+    "weighted_rag_score": 0.0
+  },
+  {
+    "num_cases": 35,
+    "failures": 3,
+    "correctness": 0.29180742625225925,
+    "groundedness": 0.3484480543232877,
+    "citation_quality": 0.8285714285714286,
+    "completeness": 0.2,
+    "retrieval_recall": 0.30952380952380953,
+    "latency_sec": 31.909063279628754,
+    "weighted_rag_score": 0.36812069836743994
+  },
+  {
+    "num_cases": 35,
+    "failures": 0,
+    "failure_types": {},
+    "correctness": 0.441697963617455,
+    "groundedness": 0.3999481928167357,
+    "citation_quality": 0.6857142857142857,
+    "completeness": 0.3476190476190476,
+    "retrieval_recall": 0.4095238095238095,
+    "latency_sec": 24.268755994524273,
+    "weighted_rag_score": 0.44904718603211835
   }
 ]

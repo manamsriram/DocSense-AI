@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from pathlib import Path
 from statistics import mean
@@ -46,8 +47,15 @@ def ask_question(question, qid):
         "latency_sec": latency
     }
 
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]+")
+
 def normalize(text):
-    return " ".join(str(text).lower().strip().split())
+    # Strip markdown emphasis, citation brackets (e.g. "**5,136**【Page 23】"),
+    # and punctuation before tokenizing, so formatting doesn't hide a
+    # substantively correct answer from token-overlap scoring.
+    lowered = str(text).lower()
+    stripped = _NON_ALNUM_RE.sub(" ", lowered)
+    return " ".join(stripped.split())
 
 def token_set(text):
     return set(normalize(text).split())
@@ -114,6 +122,21 @@ def safe_mean(values):
     vals = [v for v in values if v is not None]
     return mean(vals) if vals else 0.0
 
+def classify_failure(exc):
+    """Sub-classify a caught exception for reporting only — does not affect
+    the `failures` counter itself, so it can't change the CLAUDE.md
+    regression-gate semantics."""
+    if isinstance(exc, requests.HTTPError):
+        status = exc.response.status_code if exc.response is not None else None
+        if status in (502, 503, 504):
+            return "infra_5xx"
+        return f"http_{status}"
+    if isinstance(exc, requests.Timeout):
+        return "timeout"
+    if isinstance(exc, requests.RequestException):
+        return "network"
+    return "other"
+
 def run():
     benchmark = load_benchmark(BENCHMARK_PATH)
     per_case = []
@@ -125,7 +148,8 @@ def run():
         "retrieval_recall": [],
         "latency_sec": [],
         "weighted_rag_score": [],
-        "failures": 0
+        "failures": 0,
+        "failure_types": {}
     }
 
     for row in benchmark:
@@ -176,6 +200,8 @@ def run():
 
         except Exception as e:
             agg["failures"] += 1
+            failure_type = classify_failure(e)
+            agg["failure_types"][failure_type] = agg["failure_types"].get(failure_type, 0) + 1
             per_case.append({
                 "id": qid,
                 "question": question,
@@ -184,6 +210,7 @@ def run():
                 "sources": [],
                 "metadata": metadata,
                 "error": str(e),
+                "failure_type": failure_type,
                 "metrics": {
                     "correctness": 0.0,
                     "groundedness": 0.0,
@@ -204,6 +231,7 @@ def run():
     summary = {
         "num_cases": len(benchmark),
         "failures": agg["failures"],
+        "failure_types": agg["failure_types"],
         "correctness": safe_mean(agg["correctness"]),
         "groundedness": safe_mean(agg["groundedness"]),
         "citation_quality": safe_mean(agg["citation_quality"]),
