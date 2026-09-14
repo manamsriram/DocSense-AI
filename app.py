@@ -1585,17 +1585,28 @@ def grade_chunks(query, chunks):
     """
     if not chunks:
         return [], []
-    # Table chunks run well past 300 chars (header + many data rows) — a
-    # truncated stub hides the specific row/total a query actually needs,
-    # so the grader marks a chunk irrelevant even when it holds the answer.
-    formatted = '\n'.join(f'[{i}] {text[:1200]}' for i, text in enumerate(chunks))
+
+    # Table chunks (marked "[Table]" at ingestion, app.py:798) run well past a
+    # few hundred chars (header + up to 25 data rows) — any fixed truncation
+    # can hide the specific row/total a query needs, so the grader discards a
+    # chunk that actually holds the answer. The reranker already scored these
+    # on their full untruncated text before grading runs, so that's a
+    # stronger relevance signal than an LLM judging a chopped stub — skip
+    # LLM grading for them and trust the reranker instead.
+    table_indices = {i for i, text in enumerate(chunks) if '[Table]' in text}
+    gradable = [(i, text) for i, text in enumerate(chunks) if i not in table_indices]
+
+    if not gradable:
+        return chunks, []
+
+    formatted = '\n'.join(f'[{i}] {text[:300]}' for i, text in gradable)
     try:
         # Same reasoning-token truncation as decompose_query above — 150 was too
         # tight for gpt-oss-120b's hidden chain-of-thought to finish before the
         # visible JSON, so this routinely hit finish_reason=length.
         raw = _call_groq_helper(_GRADE_PROMPT.format(query=query, chunks=formatted), max_tokens=600)
         grades = _parse_llm_json(raw)
-        relevant_indices = {int(i) for i in grades.get('relevant', [])}
+        relevant_indices = {int(i) for i in grades.get('relevant', [])} | table_indices
         relevant = [chunks[i] for i in relevant_indices if i < len(chunks)]
         irrelevant = [chunks[i] for i in range(len(chunks)) if i not in relevant_indices]
         precision = len(relevant) / len(chunks) if chunks else 0
