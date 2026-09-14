@@ -592,7 +592,7 @@ def test_find_caption_prefers_figure_pattern():
         (100, 320, 300, 340, 'Some nearby body text', 0, 0),
         (100, 350, 300, 370, 'Figure 2: Quarterly revenue', 1, 0),
     ]
-    assert _find_caption(blocks, img_rect) == 'Figure 2: Quarterly revenue'
+    assert _find_caption(blocks, img_rect)[0] == 'Figure 2: Quarterly revenue'
 
 
 def test_find_caption_none_when_no_nearby_text():
@@ -692,7 +692,7 @@ def test_extract_page_figures_vision_fallback_for_captionless():
     from app import extract_page_figures
     with patch('app.describe_image_with_groq', return_value='Scatter plot of test data.') as mock_vis:
         budget = {'remaining': 2}
-        figures = extract_page_figures(page, vision_budget=budget)
+        figures, _ = extract_page_figures(page, vision_budget=budget)
         assert len(figures) == 1
         assert figures[0][0] == 'Scatter plot of test data.'
         assert budget['remaining'] == 1
@@ -711,8 +711,8 @@ def test_extract_page_figures_captionless_skipped_without_budget():
 
     from app import extract_page_figures
     with patch('app.describe_image_with_groq') as mock_vis:
-        assert extract_page_figures(page) == []
-        assert extract_page_figures(page, vision_budget={'remaining': 0}) == []
+        assert extract_page_figures(page) == ([], [])
+        assert extract_page_figures(page, vision_budget={'remaining': 0}) == ([], [])
         mock_vis.assert_not_called()
     doc.close()
 
