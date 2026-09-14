@@ -3,24 +3,24 @@
     "num_cases": 35,
     "failures": 0,
     "failure_types": {},
-    "correctness": 0.441697963617455,
-    "groundedness": 0.3999481928167357,
-    "citation_quality": 0.6857142857142857,
-    "completeness": 0.3476190476190476,
-    "retrieval_recall": 0.4095238095238095,
-    "latency_sec": 24.268755994524273,
-    "weighted_rag_score": 0.44904718603211835
+    "correctness": 0.456614515229005,
+    "groundedness": 0.38806768295529637,
+    "citation_quality": 0.5714285714285714,
+    "completeness": 0.30476190476190473,
+    "retrieval_recall": 0.3904761904761905,
+    "latency_sec": 38.50234114783151,
+    "weighted_rag_score": 0.42632939349709276
   },
   "results": [
     {
       "id": "q1_total_assets_2020",
       "question": "According to the 2018\u20132020 EO 13287 Section 3 report, how many United States real property assets are in NASA\u2019s inventory?",
       "reference_answer": "5,136",
-      "answer": "NASA\u2019s inventory contains **5,136 United States real\u2011property assets**\u3010Page\u202f23, final\u20112020\u2011nasa\u2011triennial\u2011report\u20112020.9.24\u2011tagged.pdf\u3011.",
+      "answer": "According to the 2018\u20132020 EO 13287 Section 3 report, NASA's inventory consists of 5,136 United States real property assets (Page 23, final-2020-nasa-triennial-report-2020.9.24-tagged.pdf).",
       "sources": [
         {
           "page": 23,
-          "score": 0.999,
+          "score": 0.9991,
           "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
           "text": "Identifying Historic Properties SECTION THREE IDENTIFYING HISTORIC PROPERTIES 3.1 INVENTORY STATUS NASA\u2019s inventory of real property consists of 5,136 United States assets. Half of NASA\u2019s real property assets are categorized as buildings and the other half as structures. Tables 3-1 through 3-4 present a breakdown of NASA\u2019s inventory of historic properties by Center and the status of archaeological survey. Of all the assets listed in NETS, approximately 53 percent have been evaluated for NRHP eligibility under at least one context, and 594 (12 percent) have been found to be eligible for listing, either individually or as a contributing resource to another property or district"
         }
@@ -32,33 +32,20 @@
       },
       "metrics": {
         "correctness": 1.0,
-        "groundedness": 0.8571428571428571,
+        "groundedness": 0.8,
         "citation_quality": 1.0,
         "completeness": 0.5,
         "retrieval_recall": 0.5,
-        "latency_sec": 61.21446228027344,
-        "weighted_rag_score": 0.8642857142857143
+        "latency_sec": 23.645893812179565,
+        "weighted_rag_score": 0.8500000000000001
       }
     },
     {
       "id": "q2_total_assets_2023",
       "question": "In the FY21\u201323 EO 13287 Section 3 report, how many built assets are listed in the table of NASA centers and component facilities?",
       "reference_answer": "5,409",
-      "answer": "The excerpts you provided do not include the contents of Table\u202f2\u20111\u2014only its heading (\u201cNo.\u202fAcronym\u202fName\u202fLocation\u202fEst.\u202fAcreage\u202fNo\u201d). Because the actual rows of the table (which would show how many built assets/centers are listed) are not shown, the number of built assets cannot be determined from the material you\u2019ve shared.",
-      "sources": [
-        {
-          "page": 16,
-          "score": 0.9952,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": "NASA\u2019s CRM Program EO 13287 Section 3 Triennial Report (FY21\u201323) 8 SECTION TWO NASA\u2019S CRM PROGRAM 2.1 NASA LOCATIONS Agency operations are implemented across 16 NASA Centers and component facilities (collectively referred to as Centers in this report) that range greatly in acreage, from 175 acres to 140,000 acres (Figure 2-1; Table 2-1). 2.2 CRM PROGRAM, POLICY, AND PROCEDURES Program Organization Based in EMD at NASA HQ, the NASA FPO is a fully dedicated subject matter expert and policy maker who communicates between HQ and the Center CRMs, drawing from insights gained through coordination with the ACHP and other agency FPOs to add support and grow the program at both the HQ and Center levels"
-        },
-        {
-          "page": 18,
-          "score": 0.9869,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": "NASA\u2019s CRM Program EO 13287 Section 3 Triennial Report (FY21\u201323) 10 Table 2-1. NASA Centers and Component Facilities. No. Acronym Name Location Est. Acreage No"
-        }
-      ],
+      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "sources": [],
       "metadata": {
         "doc": "nasa_2023_triennial",
         "type": "table",
@@ -66,27 +53,20 @@
       },
       "metrics": {
         "correctness": 0.0,
-        "groundedness": 0.3023255813953488,
-        "citation_quality": 1.0,
+        "groundedness": 0.0,
+        "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 27.59622311592102,
-        "weighted_rag_score": 0.2255813953488372
+        "latency_sec": 49.24134707450867,
+        "weighted_rag_score": 0.0
       }
     },
     {
       "id": "q3_asset_count_difference",
       "question": "What is the numeric difference in total assets between the 2018\u20132020 report\u2019s 5,136 United States assets and the FY21\u201323 report\u2019s 5,409 built assets?",
       "reference_answer": "273",
-      "answer": "The excerpt you provided includes the 2018\u20112020 figure of **5,136 United States assets**\u3010Page\u202f23, final\u20112020\u2011nasa\u2011triennial\u2011report\u20112020.9.24\u2011tagged.pdf\u3011.  \n\nHowever, the FY21\u201123 report\u2019s figure of **5,409 built assets** does not appear in any of the excerpts you supplied. Because that number is not present in the provided material, I cannot calculate the numeric difference between the two totals.",
-      "sources": [
-        {
-          "page": 23,
-          "score": 0.8788,
-          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
-          "text": "Identifying Historic Properties SECTION THREE IDENTIFYING HISTORIC PROPERTIES 3.1 INVENTORY STATUS NASA\u2019s inventory of real property consists of 5,136 United States assets. Half of NASA\u2019s real property assets are categorized as buildings and the other half as structures. Tables 3-1 through 3-4 present a breakdown of NASA\u2019s inventory of historic properties by Center and the status of archaeological survey. Of all the assets listed in NETS, approximately 53 percent have been evaluated for NRHP eligibility under at least one context, and 594 (12 percent) have been found to be eligible for listing, either individually or as a contributing resource to another property or district"
-        }
-      ],
+      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "sources": [],
       "metadata": {
         "doc": "nasa_2020_triennial",
         "type": "comparison",
@@ -94,37 +74,31 @@
       },
       "metrics": {
         "correctness": 0.0,
-        "groundedness": 0.38,
-        "citation_quality": 1.0,
+        "groundedness": 0.0,
+        "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 27.88829016685486,
-        "weighted_rag_score": 0.245
+        "latency_sec": 25.73607087135315,
+        "weighted_rag_score": 0.0
       }
     },
     {
       "id": "q4_real_property_by_decade_1960s",
       "question": "In the NASA real property by decade table, what percentage of NASA\u2019s U.S. real property portfolio dates to the 1960s?",
       "reference_answer": "23.9 percent",
-      "answer": "The table shows that **23.9\u202f%** of NASA\u2019s U.S. real\u2011property portfolio was built in the 1960s\u3010Page\u202f12, Source: eo13287_nasareport_2023.pdf\u3011.",
+      "answer": "Based on the NASA real property by decade table, **23.9%** of NASA\u2019s U.S. real property portfolio dates to the 1960s (Page 12, Source: final-2020-nasa-triennial-report-2020.9.24-tagged.pdf).",
       "sources": [
         {
           "page": 12,
-          "score": 0.9996,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": ". Table 1-1. NASA Real Property Assets by Decade. Construction Date % of U.S. Real Property Portfolio 1920s <1% 1930s <1% 1940s 7.8% 1950s 7.9% 1960s 23.9% 1970s 7.5% 1980s 11.7% 1990s 12.8% 2000s 12.8% 2010s 14.5% 2020s <1% Mission-essential buildings planned for active use require regular maintenance, repair, and upgrades to keep them functional, and while work can sometimes be deferred in an office or storage building without compromising the mission, that is not the case for HTSF and other purpose-built assets like laboratories, testing facilities, and buildings housing highly specialized scientific activities that if allowed to decline could severely undermine NASA\u2019s ability to carry out mission-critical activities"
-        },
-        {
-          "page": 12,
-          "score": 0.9995,
+          "score": 0.997,
           "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
-          "text": ". Table 1-1. NASA Real Property Assets by Decade. Construction % of U.S. Real Date Property Portfolio 1920s <1% 1930s <1% 1940s 7.8% 1950s 7.9% 1960s 23.9% 1970s 7.5% 1980s 11.7% 1990s 12.8% 2000s 12.8% 2010s 14.5% 2020s <1% The challenge of aging infrastructure is shown to be even more acute when considering square footage. With respect to approximately 117.5M total square feet (ft2) of real property assets: \u2022 Approximately 84 percent (99.1M ft2) is functionally obsolete (i.e., 40 years old or older); \u2022 Approximately 60 percent (69.5M ft2) is degraded (i.e., low FCI); and \u2022 Approximately 52 percent (61.2M ft2) is degraded and functionally obsolete (i.e., over 40 years old and with low FCI)"
+          "text": "[Table]\nTable 1-1. NASA Real Property Assets by Decade.\n|  | Construction |  |  | % of U.S. Real |  |\n| --- | --- | --- | --- | --- | --- |\n|  | Date |  |  | Property Portfolio |  |\n| 1920s |  |  | <1% |  |  |\n| 1930s |  |  | <1% |  |  |\n| 1940s |  |  | 7.8% |  |  |\n| 1950s |  |  | 7.9% |  |  |\n| 1960s |  |  | 23.9% |  |  |\n| 1970s |  |  | 7.5% |  |  |\n| 1980s |  |  | 11.7% |  |  |\n| 1990s |  |  | 12.8% |  |  |\n| 2000s |  |  | 12.8% |  |  |\n| 2010s |  |  | 14.5% |  |  |\n| 2020s |  |  | <1% |  |  |"
         },
         {
           "page": 12,
-          "score": 0.9967,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": "[Table]\n| Construction Date | % of U.S. Real Property |\n| --- | --- |\n|  | Portfolio |\n| 1920s | <1% |\n| 1930s | <1% |\n| 1940s | 7.8% |\n| 1950s | 7.9% |\n| 1960s | 23.9% |\n| 1970s | 7.5% |\n| 1980s | 11.7% |\n| 1990s | 12.8% |\n| 2000s | 12.8% |\n| 2010s | 14.5% |\n| 2020s | <1% |"
+          "score": 0.9913,
+          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
+          "text": ". Table 1-1. NASA Real Property Assets by Decade. The challenge of aging infrastructure is shown to be even more acute when considering square footage. With respect to approximately 117.5M total square feet (ft2) of real property assets: \u2022 Approximately 84 percent (99.1M ft2) is functionally obsolete (i.e., 40 years old or older); \u2022 Approximately 60 percent (69.5M ft2) is degraded (i.e., low FCI); and \u2022 Approximately 52 percent (61.2M ft2) is degraded and functionally obsolete (i.e., over 40 years old and with low FCI)"
         }
       ],
       "metadata": {
@@ -134,52 +108,33 @@
       },
       "metrics": {
         "correctness": 0.6666666666666666,
-        "groundedness": 0.8333333333333334,
+        "groundedness": 0.8214285714285714,
         "citation_quality": 1.0,
         "completeness": 0.5,
         "retrieval_recall": 0.5,
-        "latency_sec": 19.04081678390503,
-        "weighted_rag_score": 0.725
+        "latency_sec": 43.322027921676636,
+        "weighted_rag_score": 0.7220238095238095
       }
     },
     {
       "id": "q5_real_property_by_decade_2010s",
       "question": "What percentage of NASA\u2019s U.S. real property portfolio dates to the 2010s according to the real property assets by decade table?",
       "reference_answer": "14.5 percent",
-      "answer": "The \u201cNASA Real Property Assets by Decade\u201d table lists the 2010s as accounting for **14.5\u202f%** of NASA\u2019s U.S. real\u2011property portfolio\u3010Page\u202f12, Source: eo13287_nasareport_2023.pdf\u3011 (the same figure appears in the 2020 triennial report table\u3010Page\u202f12, Source: final\u20112020\u2011nasa\u2011triennial\u2011report\u20112020.9.24\u2011tagged.pdf\u3011).",
-      "sources": [
-        {
-          "page": 12,
-          "score": 0.9996,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": ". Table 1-1. NASA Real Property Assets by Decade. Construction Date % of U.S. Real Property Portfolio 1920s <1% 1930s <1% 1940s 7.8% 1950s 7.9% 1960s 23.9% 1970s 7.5% 1980s 11.7% 1990s 12.8% 2000s 12.8% 2010s 14.5% 2020s <1% Mission-essential buildings planned for active use require regular maintenance, repair, and upgrades to keep them functional, and while work can sometimes be deferred in an office or storage building without compromising the mission, that is not the case for HTSF and other purpose-built assets like laboratories, testing facilities, and buildings housing highly specialized scientific activities that if allowed to decline could severely undermine NASA\u2019s ability to carry out mission-critical activities"
-        },
-        {
-          "page": 12,
-          "score": 0.9996,
-          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
-          "text": ". Table 1-1. NASA Real Property Assets by Decade. Construction % of U.S. Real Date Property Portfolio 1920s <1% 1930s <1% 1940s 7.8% 1950s 7.9% 1960s 23.9% 1970s 7.5% 1980s 11.7% 1990s 12.8% 2000s 12.8% 2010s 14.5% 2020s <1% The challenge of aging infrastructure is shown to be even more acute when considering square footage. With respect to approximately 117.5M total square feet (ft2) of real property assets: \u2022 Approximately 84 percent (99.1M ft2) is functionally obsolete (i.e., 40 years old or older); \u2022 Approximately 60 percent (69.5M ft2) is degraded (i.e., low FCI); and \u2022 Approximately 52 percent (61.2M ft2) is degraded and functionally obsolete (i.e., over 40 years old and with low FCI)"
-        },
-        {
-          "page": 12,
-          "score": 0.9963,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": "[Table]\n| Construction Date | % of U.S. Real Property |\n| --- | --- |\n|  | Portfolio |\n| 1920s | <1% |\n| 1930s | <1% |\n| 1940s | 7.8% |\n| 1950s | 7.9% |\n| 1960s | 23.9% |\n| 1970s | 7.5% |\n| 1980s | 11.7% |\n| 1990s | 12.8% |\n| 2000s | 12.8% |\n| 2010s | 14.5% |\n| 2020s | <1% |"
-        }
-      ],
+      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "sources": [],
       "metadata": {
         "doc": "nasa_2020_triennial",
         "type": "table",
         "difficulty": "easy"
       },
       "metrics": {
-        "correctness": 0.6666666666666666,
-        "groundedness": 0.7837837837837838,
-        "citation_quality": 1.0,
-        "completeness": 0.5,
-        "retrieval_recall": 0.5,
-        "latency_sec": 17.884816884994507,
-        "weighted_rag_score": 0.7126126126126126
+        "correctness": 0.0,
+        "groundedness": 0.0,
+        "citation_quality": 0.0,
+        "completeness": 0.0,
+        "retrieval_recall": 0.0,
+        "latency_sec": 21.493566036224365,
+        "weighted_rag_score": 0.0
       }
     },
     {
@@ -199,7 +154,7 @@
         "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 21.106645107269287,
+        "latency_sec": 22.395246744155884,
         "weighted_rag_score": 0.0
       }
     },
@@ -220,7 +175,7 @@
         "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 22.45643711090088,
+        "latency_sec": 19.824296951293945,
         "weighted_rag_score": 0.0
       }
     },
@@ -228,40 +183,59 @@
       "id": "q8_degraded_obsolete_sq_ft",
       "question": "According to the 2018\u20132020 report, what percentage of NASA\u2019s total real property square footage is both degraded and functionally obsolete (i.e., over 40 years old and with low FCI)?",
       "reference_answer": "52 percent",
-      "answer": "I couldn't find relevant information in your documents to answer this question.",
-      "sources": [],
+      "answer": "According to the report, approximately **52 percent** (61.2M ft2) of NASA's total real property square footage is both degraded and functionally obsolete (i.e., over 40 years old and with low FCI) (Page 12).",
+      "sources": [
+        {
+          "page": 12,
+          "score": 0.9987,
+          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
+          "text": ". Table 1-1. NASA Real Property Assets by Decade. The challenge of aging infrastructure is shown to be even more acute when considering square footage. With respect to approximately 117.5M total square feet (ft2) of real property assets: \u2022 Approximately 84 percent (99.1M ft2) is functionally obsolete (i.e., 40 years old or older); \u2022 Approximately 60 percent (69.5M ft2) is degraded (i.e., low FCI); and \u2022 Approximately 52 percent (61.2M ft2) is degraded and functionally obsolete (i.e., over 40 years old and with low FCI)"
+        }
+      ],
       "metadata": {
         "doc": "nasa_2020_triennial",
         "type": "lookup",
         "difficulty": "medium"
       },
       "metrics": {
-        "correctness": 0.0,
-        "groundedness": 0.0,
-        "citation_quality": 0.0,
-        "completeness": 0.0,
-        "retrieval_recall": 0.0,
-        "latency_sec": 34.902137994766235,
-        "weighted_rag_score": 0.0
+        "correctness": 1.0,
+        "groundedness": 0.8571428571428571,
+        "citation_quality": 1.0,
+        "completeness": 1.0,
+        "retrieval_recall": 1.0,
+        "latency_sec": 38.210110902786255,
+        "weighted_rag_score": 0.9642857142857144
       }
     },
     {
       "id": "q9_center_largest_acreage",
       "question": "Which NASA center listed in the centers and component facilities table has the largest acreage, and what is that acreage?",
       "reference_answer": "Kennedy Space Center, 140,000 acres",
-      "answer": "The excerpts you provided only give the citation information for the tables (\u201cTable\u202f2\u20111. NASA Centers and Component Facilities\u201d) but they do not include the actual table data showing each center\u2019s estimated acreage. Because the specific acreage figures are not present in the excerpts, I cannot determine from them which NASA center has the largest acreage or what that acreage is.",
+      "answer": "Based on the provided tables (Table 2-1), the NASA center with the largest acreage is the **Kennedy Space Center**, with an acreage of **140,000** [Page 17, Source: final-2020-nasa-triennial-report-2020.9.24-tagged.pdf; Page 18, Source: eo13287_nasareport_2023.pdf].",
       "sources": [
         {
+          "page": 16,
+          "score": 0.9947,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": "NASA\u2019s CRM Program EO 13287 Section 3 Triennial Report (FY21\u201323) 8 SECTION TWO NASA\u2019S CRM PROGRAM 2.1 NASA LOCATIONS Agency operations are implemented across 16 NASA Centers and component facilities (collectively referred to as Centers in this report) that range greatly in acreage, from 175 acres to 140,000 acres (Figure 2-1; Table 2-1). 2.2 CRM PROGRAM, POLICY, AND PROCEDURES Program Organization Based in EMD at NASA HQ, the NASA FPO is a fully dedicated subject matter expert and policy maker who communicates between HQ and the Center CRMs, drawing from insights gained through coordination with the ACHP and other agency FPOs to add support and grow the program at both the HQ and Center levels"
+        },
+        {
           "page": 17,
-          "score": 0.9902,
+          "score": 0.9942,
           "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
-          "text": "NASA\u2019s CRM Program Table 2-1. NASA Centers and Component Facilities. No. Acronym Name Location Est. Acreage No"
+          "text": "[Table]\nTable 2-1. NASA Centers and Component Facilities.\n| No. |  | Acronym | Name | Location | Est. |  | Acreage |  |  |  | No. Built |  |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n|  |  |  |  |  |  |  |  |  |  |  | Assets (2020) |  |\n| 1 |  | AFRC | Armstrong Flight Research Center | California | 1954 |  | 1,145 |  |  | 212 |  |  |\n| 2 |  | ARC | Ames Research Center | California | 1940 |  | 1,874 |  |  | 393 |  |  |\n| 3 |  | GDSCC | Goldstone Deep Space Communication Complex (component facility of JPL) | California | 1958 |  | 28,170 |  |  | 143 |  |  |\n| 4 |  | GRC | Glenn Research Center | Ohio | 1940 |  | 307 |  |  | 200 |  |  |\n| 5 |  | GRC-PBS | Glenn Research Center \u2013 Plum Brook Station | Ohio | 1956 |  | 6,458 |  |  | 166 |  |  |\n| 6 |  | GSFC | Goddard Space Flight Center | Maryland | 1959 |  | 1,844 |  |  | 488 |  |  |\n| 7 |  | JPL | Jet Propulsion Laboratory | California | 1958 |  | 175 |  |  | 223 |  |  |\n| 8 |  | JSC | Johnson Space Center* | Texas | 1962 |  | 1,634 |  |  | 405 |  |  |\n| 9 |  | KSC | Kennedy Space Center | Florida | 1958 |  | 140,000 |  |  | 859 |  |  |\n| 10 |  | LaRC | Langley Research Center | Virginia | 1917 |  | 764 |  |  | 281 |  |  |\n| 11 |  | MAF | Michoud Assembly Facility (component facility of MSFC) | Louisiana | 1964 |  | 832 |  |  | 166 |  |  |\n| 12 |  | MSFC | Marshall Space Flight Center | Alabama | 1960 |  | 1,841 |  |  | 335 |  |  |\n| 13 |  | SSC | Stennis Space Center | Mississippi | 1962 |  | 13,800 |  |  | 419 |  |  |\n| 14 |  | SSFL | Santa Susana Field Laboratory (component facility of MSFC) | California | 1975 |  | 451 |  |  | 36 |  |  |\n| 15 |  | WFF | Wallops Flight Facility (component facility of GSFC) | Virginia | 1959 |  | 6,200 |  |  | 596 |  |  |\n| 16 |  | WSTF | White Sands Test Facility (component facility of JSC) | New Mexico | 1962 |  | 26,900 |  |  | 214 |  |  |\n|  | TOTALS |  |  |  |  |  |  | 232,395 |  |  | 5,136 |  |"
         },
         {
           "page": 18,
-          "score": 0.9887,
+          "score": 0.9936,
           "source": "eo13287_nasareport_2023.pdf",
-          "text": "NASA\u2019s CRM Program EO 13287 Section 3 Triennial Report (FY21\u201323) 10 Table 2-1. NASA Centers and Component Facilities. No. Acronym Name Location Est. Acreage No"
+          "text": "[Table]\nTable 2-1. NASA Centers and Component Facilities.\n| No. | Acronym | Name | Location | Est. | Acreage | No. Built |\n| --- | --- | --- | --- | --- | --- | --- |\n|  |  |  |  |  |  | Assets (2023) |\n| 1 | AFRC | Armstrong Flight Research Center | California | 1954 | 1,145 | 207 |\n| 2 | ARC | Ames Research Center | California | 1939 | 1,874 | 396 |\n| 3 | GDSN | Goldstone Deep Space Communication Complex (component facility of JPL) | California | 1958 | 28,170 | 143 |\n| 4 | GRC | Glenn Research Center | Ohio | 1941 | 307 | 199 |\n| 5 | GRC-ATF | Glenn Research Center \u2013 Armstrong Test Facility | Ohio | 1956 | 6,458 | 166 |\n| 6 | GSFC | Goddard Space Flight Center | Maryland | 1959 | 1,844 | 472 |\n| 7 | JPL | Jet Propulsion Laboratory | California | 1958 | 175 | 387 |\n| 8 | JSC | Johnson Space Center* | Texas | 1962 | 1,634 | 417 |\n| 9 | KSC | Kennedy Space Center | Florida | 1958 | 140,000 | 919 |\n| 10 | LaRC | Langley Research Center | Virginia | 1917 | 764 | 283 |\n| 11 | MAF | Michoud Assembly Facility (component facility of MSFC) | Louisiana | 1964 | 832 | 166 |\n| 12 | MSFC | Marshall Space Flight Center | Alabama | 1960 | 1,841 | 353 |\n| 13 | SSC | Stennis Space Center | Mississippi | 1962 | 13,800 | 419 |\n| 14 | SSFL** | Santa Susana Field Laboratory (component facility of MSFC) | California | 1975 | 451 | 33 |\n| 15 | WFF | Wallops Flight Facility (component facility of GSFC) | Virginia | 1959 | 6,200 | 625 |\n| 16 | WSTF | White Sands Test Facility (component facility of JSC) | New Mexico | 1962 | 26,900 | 224 |\n| TOTALS |  |  |  |  | 232,395 | 5,409 |"
+        },
+        {
+          "page": 15,
+          "score": 0.9929,
+          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
+          "text": "NASA\u2019s CRM Program SECTION TWO NASA\u2019S CRM PROGRAM 2.1 NASA LOCATIONS Agency operations are implemented across 16 NASA Centers and component facilities (collectively referred to as Centers in this report) that range greatly in acreage, from 175 acres to 140,000 acres (Figure 2-1; Table 2-1). 2.2 CRM PROGRAM, POLICY, AND PROCEDURES NASA codifies its policies in NPDs and implementing procedures in NASA Procedural Requirements (NPRs). Cultural resources fall under NPD 8500.1, NASA Environmental Management, and are governed by NPR 8510.1A, Cultural Resources Management (CRM NPR)"
         }
       ],
       "metadata": {
@@ -270,13 +244,13 @@
         "difficulty": "medium"
       },
       "metrics": {
-        "correctness": 0.16666666666666666,
-        "groundedness": 0.20408163265306123,
+        "correctness": 0.8333333333333334,
+        "groundedness": 0.7428571428571429,
         "citation_quality": 1.0,
-        "completeness": 0.0,
-        "retrieval_recall": 0.0,
-        "latency_sec": 24.932235717773438,
-        "weighted_rag_score": 0.267687074829932
+        "completeness": 0.5,
+        "retrieval_recall": 0.5,
+        "latency_sec": 37.108059883117676,
+        "weighted_rag_score": 0.7690476190476191
       }
     },
     {
@@ -296,7 +270,7 @@
         "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 27.488483905792236,
+        "latency_sec": 83.6000919342041,
         "weighted_rag_score": 0.0
       }
     },
@@ -304,55 +278,129 @@
       "id": "q11_center_highest_built_assets_2023",
       "question": "In the FY21\u201323 centers table, which center or facility has the highest number of built assets, and what is that number?",
       "reference_answer": "Wallops Flight Facility, 625 built assets",
-      "answer": "I couldn't find relevant information in your documents to answer this question.",
-      "sources": [],
+      "answer": "Based on the provided table, the center or facility with the highest number of built assets in 2023 is the **Kennedy Space Center (KSC)** with **919** built assets (Page 18, eo13287_nasareport_2023.pdf).",
+      "sources": [
+        {
+          "page": 18,
+          "score": 0.4837,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": "[Table]\nTable 2-1. NASA Centers and Component Facilities.\n| No. | Acronym | Name | Location | Est. | Acreage | No. Built |\n| --- | --- | --- | --- | --- | --- | --- |\n|  |  |  |  |  |  | Assets (2023) |\n| 1 | AFRC | Armstrong Flight Research Center | California | 1954 | 1,145 | 207 |\n| 2 | ARC | Ames Research Center | California | 1939 | 1,874 | 396 |\n| 3 | GDSN | Goldstone Deep Space Communication Complex (component facility of JPL) | California | 1958 | 28,170 | 143 |\n| 4 | GRC | Glenn Research Center | Ohio | 1941 | 307 | 199 |\n| 5 | GRC-ATF | Glenn Research Center \u2013 Armstrong Test Facility | Ohio | 1956 | 6,458 | 166 |\n| 6 | GSFC | Goddard Space Flight Center | Maryland | 1959 | 1,844 | 472 |\n| 7 | JPL | Jet Propulsion Laboratory | California | 1958 | 175 | 387 |\n| 8 | JSC | Johnson Space Center* | Texas | 1962 | 1,634 | 417 |\n| 9 | KSC | Kennedy Space Center | Florida | 1958 | 140,000 | 919 |\n| 10 | LaRC | Langley Research Center | Virginia | 1917 | 764 | 283 |\n| 11 | MAF | Michoud Assembly Facility (component facility of MSFC) | Louisiana | 1964 | 832 | 166 |\n| 12 | MSFC | Marshall Space Flight Center | Alabama | 1960 | 1,841 | 353 |\n| 13 | SSC | Stennis Space Center | Mississippi | 1962 | 13,800 | 419 |\n| 14 | SSFL** | Santa Susana Field Laboratory (component facility of MSFC) | California | 1975 | 451 | 33 |\n| 15 | WFF | Wallops Flight Facility (component facility of GSFC) | Virginia | 1959 | 6,200 | 625 |\n| 16 | WSTF | White Sands Test Facility (component facility of JSC) | New Mexico | 1962 | 26,900 | 224 |\n| TOTALS |  |  |  |  | 232,395 | 5,409 |"
+        }
+      ],
       "metadata": {
         "doc": "nasa_2023_triennial",
         "type": "table",
         "difficulty": "medium"
       },
       "metrics": {
-        "correctness": 0.0,
-        "groundedness": 0.0,
-        "citation_quality": 0.0,
+        "correctness": 0.5,
+        "groundedness": 0.5384615384615384,
+        "citation_quality": 1.0,
         "completeness": 0.0,
-        "retrieval_recall": 0.0,
-        "latency_sec": 37.682475090026855,
-        "weighted_rag_score": 0.0
+        "retrieval_recall": 0.5,
+        "latency_sec": 35.42653179168701,
+        "weighted_rag_score": 0.48461538461538467
       }
     },
     {
       "id": "q12_ssfl_note",
       "question": "What note does the FY21\u201323 centers table include about operations at the Santa Susana Field Laboratory (SSFL)?",
       "reference_answer": "NASA is no longer carrying out operations at SSFL and is engaged in environmental remediation in order to excess the property.",
-      "answer": "The FY\u202f21\u201123 centers table marks the Santa\u202fSusana Field Laboratory (SSFL) entry with a double\u2011asterisk footnote symbol (\u201c**\u201d) (see page\u202f18 of the 2023 report). However, the text of that footnote \u2013 the specific note about operations at SSFL \u2013 is not included in the excerpts you provided. Consequently, the exact wording of the note cannot be determined from the available material.",
-      "sources": [
-        {
-          "page": 18,
-          "score": 0.8485,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": "Assembly Facility (component facility of MSFC) Louisiana 1964 832 166 12 MSFC Marshall Space Flight Center Alabama 1960 1,841 353 13 SSC Stennis Space Center Mississippi 1962 13,800 419 14 SSFL** Santa Susana Field Laboratory (component facility of MSFC) California 1975 451 33 15 WFF Wallops Flight Facility (component facility of GSFC) Virginia 1959 6,200 625 16 WSTF White Sands Test Facility (component facility of JSC) New Mexico 1962 26,900 224 TOTALS 232,395 5,409 * Includes Ellington Field (ELF) and Sonny Carter Training Facility (SCTF)"
-        }
-      ],
+      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "sources": [],
       "metadata": {
         "doc": "nasa_2023_triennial",
         "type": "lookup",
         "difficulty": "hard"
       },
       "metrics": {
-        "correctness": 0.3157894736842105,
-        "groundedness": 0.14285714285714285,
-        "citation_quality": 1.0,
+        "correctness": 0.10526315789473684,
+        "groundedness": 0.0,
+        "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 15.232574939727783,
-        "weighted_rag_score": 0.3120300751879699
+        "latency_sec": 53.3428680896759,
+        "weighted_rag_score": 0.042105263157894736
       }
     },
     {
       "id": "q13_programmatic_agreements_ksc",
       "question": "In the 2018\u20132020 programmatic agreements table, what is the status and scope of the programmatic agreement for Kennedy Space Center (KSC)?",
       "reference_answer": "Status: Executed; Revision underway. Scope: Center wide.",
+      "answer": "Based on the 2018\u20132020 programmatic agreements table, the status and scope for Kennedy Space Center (KSC) are:\n\n* **Status:** Executed; Revision underway\n* **Scope:** Center wide\n\n(Source: Page 22, *final-2020-nasa-triennial-report-2020.9.24-tagged.pdf*)",
+      "sources": [
+        {
+          "page": 22,
+          "score": 0.9818,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": "[Table]\nTable 2-2. NASA Programmatic Agreements.\n| Center | No. | Status | Scope |\n| --- | --- | --- | --- |\n| Agency wide | 1 | Executed | NHLs |\n|  | 1 | In development | Agency wide (APA) |\n| AFRC | 0 | N/A | N/A |\n| ARC | 1 | In development | Center wide |\n| GDSCC | 0 | N/A | N/A |\n| GRC | 0 | N/A | N/A |\n| GRC-ATF | 1 | Expired July 11, 2023, not intending to renew | Center wide |\n| GSFC | 0 | N/A | N/A |\n| JPL | 0 | N/A | N/A |\n| JSC | 1 | Executed | Space Shuttle Assets |\n| KSC | 1 | Executed | Center wide |\n| LaRC | 1 | Executed (extended to 2025) | Center wide |\n| MAF | 0 | N/A | N/A |\n| MSFC | 1 | Executed; Renewal underway, pending update to gate-to-gate survey | Center wide |\n| SSC | 0 | N/A | N/A |\n| SSFL | 1 | Executed | Center wide |\n| WFF | 1 | Executed | Center wide |\n| WSTF | 0 | N/A | N/A |"
+        },
+        {
+          "page": 22,
+          "score": 0.9779,
+          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
+          "text": "[Table]\nTable 2-2. NASA Programmatic Agreements.\n|  | Center |  |  | No. |  |  | Status |  |  | Scope |  |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| Agency wide |  |  | 1 |  |  | Executed |  |  | NHLs |  |  |\n| AFRC |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| ARC |  |  | 1 |  |  | In development |  |  | Center wide |  |  |\n| GDSCC |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| GRC |  |  | 1 |  |  | In development |  |  | Center wide |  |  |\n| GRC-PBS |  |  | 1 |  |  | Executed |  |  | Center wide |  |  |\n| GSFC |  |  | 1 |  |  | In development |  |  | Center wide |  |  |\n| JPL |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| JSC |  |  | 1 |  |  | In development |  |  | Center wide |  |  |\n|  |  |  | 1 |  |  | Executed |  |  | Space Shuttle Assets |  |  |\n| KSC |  |  | 1 |  |  | Executed; Revision underway |  |  | Center wide |  |  |\n| LaRC |  |  | 1 |  |  | Executed |  |  | Center wide |  |  |\n| MAF |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| MSFC |  |  | 1 |  |  | Executed; Renewal underway |  |  | Center wide |  |  |\n| SSC |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| SSFL |  |  | 1 |  |  | Executed |  |  | Center wide |  |  |\n| WFF |  |  | 1 |  |  | Executed |  |  | Center wide |  |  |\n| WSTF |  |  | 0 |  |  | N/A |  |  | N/A |  |  |"
+        }
+      ],
+      "metadata": {
+        "doc": "nasa_2020_triennial",
+        "type": "table",
+        "difficulty": "medium"
+      },
+      "metrics": {
+        "correctness": 1.0,
+        "groundedness": 0.65625,
+        "citation_quality": 1.0,
+        "completeness": 0.0,
+        "retrieval_recall": 1.0,
+        "latency_sec": 32.79057788848877,
+        "weighted_rag_score": 0.7140625
+      }
+    },
+    {
+      "id": "q14_programmatic_agreements_agency_wide",
+      "question": "In the 2018\u20132020 programmatic agreements table, what is the status and scope of NASA\u2019s agency-wide programmatic agreement?",
+      "reference_answer": "Status: Executed. Scope: NHLs.",
+      "answer": "Based on Table 2-2 in the provided document, the status of NASA\u2019s agency-wide programmatic agreement is **Executed** and its scope is **NHLs** (National Historic Landmarks) [Page 22].",
+      "sources": [
+        {
+          "page": 22,
+          "score": 0.9916,
+          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
+          "text": "[Table]\nTable 2-2. NASA Programmatic Agreements.\n|  | Center |  |  | No. |  |  | Status |  |  | Scope |  |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| Agency wide |  |  | 1 |  |  | Executed |  |  | NHLs |  |  |\n| AFRC |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| ARC |  |  | 1 |  |  | In development |  |  | Center wide |  |  |\n| GDSCC |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| GRC |  |  | 1 |  |  | In development |  |  | Center wide |  |  |\n| GRC-PBS |  |  | 1 |  |  | Executed |  |  | Center wide |  |  |\n| GSFC |  |  | 1 |  |  | In development |  |  | Center wide |  |  |\n| JPL |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| JSC |  |  | 1 |  |  | In development |  |  | Center wide |  |  |\n|  |  |  | 1 |  |  | Executed |  |  | Space Shuttle Assets |  |  |\n| KSC |  |  | 1 |  |  | Executed; Revision underway |  |  | Center wide |  |  |\n| LaRC |  |  | 1 |  |  | Executed |  |  | Center wide |  |  |\n| MAF |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| MSFC |  |  | 1 |  |  | Executed; Renewal underway |  |  | Center wide |  |  |\n| SSC |  |  | 0 |  |  | N/A |  |  | N/A |  |  |\n| SSFL |  |  | 1 |  |  | Executed |  |  | Center wide |  |  |\n| WFF |  |  | 1 |  |  | Executed |  |  | Center wide |  |  |\n| WSTF |  |  | 0 |  |  | N/A |  |  | N/A |  |  |"
+        },
+        {
+          "page": 22,
+          "score": 0.9775,
+          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
+          "text": "NASA\u2019s CRM Program Table 2-2. NASA Programmatic Agreements. EO 13287 Section 3 Triennial Report (2018\u20132020) 15"
+        },
+        {
+          "page": 21,
+          "score": 0.9742,
+          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
+          "text": ". All NASA Centers have an ICRMP in place, an improvement since the last reporting period. 2.5 CENTER PROGRAMMATIC AGREEMENTS Proactive, inclusive resource surveys at the Centers have laid the groundwork for more effective, informed, and efficient management of the Section 106 process through Center PAs. In addition to NASA\u2019s agency-wide PA for NHLs, six Centers have general Center-wide PAs in place, and they are in development at another four Centers (Table 2-2). Centers are encouraged to include provisions in their PAs for actions that can be taken to avoid adverse effects to historic properties, such as archaeological monitoring and adherence to the SOI\u2019s guidelines when modifying historic buildings. EO 13287 Section 3 Triennial Report (2018\u20132020) 14"
+        }
+      ],
+      "metadata": {
+        "doc": "nasa_2020_triennial",
+        "type": "table",
+        "difficulty": "medium"
+      },
+      "metrics": {
+        "correctness": 1.0,
+        "groundedness": 0.5925925925925926,
+        "citation_quality": 1.0,
+        "completeness": 0.0,
+        "retrieval_recall": 1.0,
+        "latency_sec": 31.309267044067383,
+        "weighted_rag_score": 0.6981481481481482
+      }
+    },
+    {
+      "id": "q15_identified_historic_properties_total_nhls",
+      "question": "According to the identified historic properties by center table, how many National Historic Landmarks (NHLs) are listed in total across NASA centers?",
+      "reference_answer": "21",
       "answer": "I couldn't find relevant information in your documents to answer this question.",
       "sources": [],
       "metadata": {
@@ -366,83 +414,21 @@
         "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 66.21365308761597,
+        "latency_sec": 49.80914807319641,
         "weighted_rag_score": 0.0
-      }
-    },
-    {
-      "id": "q14_programmatic_agreements_agency_wide",
-      "question": "In the 2018\u20132020 programmatic agreements table, what is the status and scope of NASA\u2019s agency-wide programmatic agreement?",
-      "reference_answer": "Status: Executed. Scope: NHLs.",
-      "answer": "The table for the 2018\u20112020 programmatic agreements lists the **agency\u2011wide** agreement as having a **status of \u201cExecuted\u201d** and a **scope of \u201cNHLs\u201d** (National Historic Landmarks)\u3010Page\u202f22, final\u20112020\u2011nasa\u2011triennial\u2011report\u20112020.9.24\u2011tagged.pdf\u3011.",
-      "sources": [
-        {
-          "page": 22,
-          "score": 0.9974,
-          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
-          "text": "NASA\u2019s CRM Program Table 2-2. NASA Programmatic Agreements. Center No. Status Scope Agency wide 1 Executed NHLs AFRC 0 N/A N/A ARC 1 In development Center wide GDSCC 0 N/A N/A GRC 1 In development Center wide GRC-PBS 1 Executed Center wide GSFC 1 In development Center wide JPL 0 N/A N/A JSC 1 In development Center wide 1 Executed Space Shuttle Assets KSC 1 Executed; Revision underway Center wide LaRC 1 Executed Center wide MAF 0 N/A N/A MSFC 1 Executed; Renewal underway Center wide SSC 0 N/A N/A SSFL 1 Executed Center wide WFF 1 Executed Center wide WSTF 0 N/A N/A EO 13287 Section 3 Triennial Report (2018\u20132020) 15"
-        }
-      ],
-      "metadata": {
-        "doc": "nasa_2020_triennial",
-        "type": "table",
-        "difficulty": "medium"
-      },
-      "metrics": {
-        "correctness": 1.0,
-        "groundedness": 0.6060606060606061,
-        "citation_quality": 1.0,
-        "completeness": 0.0,
-        "retrieval_recall": 1.0,
-        "latency_sec": 26.051164865493774,
-        "weighted_rag_score": 0.7015151515151515
-      }
-    },
-    {
-      "id": "q15_identified_historic_properties_total_nhls",
-      "question": "According to the identified historic properties by center table, how many National Historic Landmarks (NHLs) are listed in total across NASA centers?",
-      "reference_answer": "21",
-      "answer": "The \u201cIdentified Historic Properties by Center\u201d table lists the total number of National Historic Landmarks (NHLs) for all NASA centers as **192**\u202f\u3010Page\u202f29,\u202feo13287_nasareport_2023.pdf\u3011.  \n\n*(For reference, the earlier 2020 triennial report showed 174 NHLs\u202f\u3010Page\u202f24,\u202ffinal-2020-nasa-triennial-report-2020.9.24-tagged.pdf\u3011, but the most recent FY\u202f21\u201123 table reports 192.)*",
-      "sources": [
-        {
-          "page": 24,
-          "score": 0.9966,
-          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
-          "text": "Identifying Historic Properties Table 3-1. Identified Historic Properties by Center. Center Built Resources* Archaeological Sites NHLs** Individually NRHP Listed*** Individually Eligible Historic Districts Contributing Resources**** AFRC 0 0 1 1 4 0 ARC 4 52 1 2 47 0 GDSCC 1 0 1 0 0 0 GRC/PBS 2 0 3 1 87 0 GSFC 1 0 1 1 31 0 JPL 2 0 8 1 29 0 JSC 2 0 55 1 50 0 KSC 1 45 41 7 77 31 LaRC 3 0 12 1 109 12 MAF 0 0 6 0 0 0 MSFC 4 0 26 0 0 7 SSC 1 0 1 1 27 2 SSFL 0 0 12 3 12 1 WFF 0 0 3 0 0 2 WSTF 0 0 3 2 23 3 TOTALS 21 97 174 21 496 58 *Includes United States real property assets as well as personal property. **NHLs comprised of multiple resources are counted as a single property. ***Does not include designated NHLs, which are automatically listed in the NRHP"
-        },
-        {
-          "page": 29,
-          "score": 0.9962,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": "Identifying Historic Properties EO 13287 Section 3 Triennial Report (FY21\u201323) 21 Table 3-1. Identified Historic Properties by Center. Center Built Resources* Archaeological Sites NHLs** Individually NRHP Listed*** Individually Eligible Historic Districts Contributing Resources**** AFRC 0 0 1 1 4 0 ARC 4 52 1 2 47 0 GDSN 1 0 1 0 0 0 GRC/ATF 2 0 3 1 87 0 GSFC 1 0 0 1 32 0 JPL 2 0 8 1 30 0 JSC 2 0 76 1 70 0 KSC 1 45 42 8 97 31 LaRC 3 0 12 1 111 12 MAF 0 0 6 0 0 0 MSFC 4 0 26 0 0 7 SSC 1 0 1 1 23 2 SSFL 0 0 9 2 9 1 WFF 0 0 2 0 0 2 WSTF 0 0 4 2 23 3 TOTALS 21 97 192 21 533 58 *Includes United States real property assets as well as personal property. **NHLs comprised of multiple resources are counted as a single property"
-        }
-      ],
-      "metadata": {
-        "doc": "nasa_2020_triennial",
-        "type": "table",
-        "difficulty": "medium"
-      },
-      "metrics": {
-        "correctness": 1.0,
-        "groundedness": 0.6136363636363636,
-        "citation_quality": 1.0,
-        "completeness": 0.5,
-        "retrieval_recall": 0.5,
-        "latency_sec": 16.186607122421265,
-        "weighted_rag_score": 0.803409090909091
       }
     },
     {
       "id": "q16_identified_historic_properties_total_individually_listed",
       "question": "In the same table, how many properties are shown as individually NRHP listed across all NASA centers?",
       "reference_answer": "97",
-      "answer": "The table\u2019s \u201cIndividually\u202fNRHP\u202fListed\u201d column totals **21** properties across all NASA centers\u3010Page\u202f24, Source: final\u20112020\u2011nasa\u2011triennial\u2011report\u20112020.9.24\u2011tagged.pdf\u3011.",
+      "answer": "Based on the provided table, there are **97** properties shown as individually NRHP listed across all NASA centers (as indicated in the \"TOTALS\" row under the \"Individually NRHP Listed***\" column) [Page 29, Source: eo13287_nasareport_2023.pdf].",
       "sources": [
         {
-          "page": 24,
-          "score": 0.971,
-          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
-          "text": "Identifying Historic Properties Table 3-1. Identified Historic Properties by Center. Center Built Resources* Archaeological Sites NHLs** Individually NRHP Listed*** Individually Eligible Historic Districts Contributing Resources**** AFRC 0 0 1 1 4 0 ARC 4 52 1 2 47 0 GDSCC 1 0 1 0 0 0 GRC/PBS 2 0 3 1 87 0 GSFC 1 0 1 1 31 0 JPL 2 0 8 1 29 0 JSC 2 0 55 1 50 0 KSC 1 45 41 7 77 31 LaRC 3 0 12 1 109 12 MAF 0 0 6 0 0 0 MSFC 4 0 26 0 0 7 SSC 1 0 1 1 27 2 SSFL 0 0 12 3 12 1 WFF 0 0 3 0 0 2 WSTF 0 0 3 2 23 3 TOTALS 21 97 174 21 496 58 *Includes United States real property assets as well as personal property. **NHLs comprised of multiple resources are counted as a single property. ***Does not include designated NHLs, which are automatically listed in the NRHP"
+          "page": 29,
+          "score": 0.8327,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": "[Table]\nIdentifying Historic Properties\n|  | Built Resources* |  |  |  |  |  |\n| --- | --- | --- | --- | --- | --- | --- |\n|  |  |  |  |  |  | Archaeological |\n| Center | NHLs** | Individually | Individually | Historic Districts | Contributing |  |\n|  |  |  |  |  |  | Sites |\n|  |  | NRHP Listed*** | Eligible |  | Resources**** |  |\n| AFRC | 0 | 0 | 1 | 1 | 4 | 0 |\n| ARC | 4 | 52 | 1 | 2 | 47 | 0 |\n| GDSN | 1 | 0 | 1 | 0 | 0 | 0 |\n| GRC/ATF | 2 | 0 | 3 | 1 | 87 | 0 |\n| GSFC | 1 | 0 | 0 | 1 | 32 | 0 |\n| JPL | 2 | 0 | 8 | 1 | 30 | 0 |\n| JSC | 2 | 0 | 76 | 1 | 70 | 0 |\n| KSC | 1 | 45 | 42 | 8 | 97 | 31 |\n| LaRC | 3 | 0 | 12 | 1 | 111 | 12 |\n| MAF | 0 | 0 | 6 | 0 | 0 | 0 |\n| MSFC | 4 | 0 | 26 | 0 | 0 | 7 |\n| SSC | 1 | 0 | 1 | 1 | 23 | 2 |\n| SSFL | 0 | 0 | 9 | 2 | 9 | 1 |\n| WFF | 0 | 0 | 2 | 0 | 0 | 2 |\n| WSTF | 0 | 0 | 4 | 2 | 23 | 3 |\n| TOTALS | 21 | 97 | 192 | 21 | 533 | 58 |"
         }
       ],
       "metadata": {
@@ -451,26 +437,32 @@
         "difficulty": "medium"
       },
       "metrics": {
-        "correctness": 0.0,
-        "groundedness": 0.7083333333333334,
+        "correctness": 1.0,
+        "groundedness": 0.3548387096774194,
         "citation_quality": 1.0,
-        "completeness": 0.0,
+        "completeness": 0.5,
         "retrieval_recall": 0.5,
-        "latency_sec": 19.061120986938477,
-        "weighted_rag_score": 0.32708333333333334
+        "latency_sec": 46.93720102310181,
+        "weighted_rag_score": 0.7387096774193549
       }
     },
     {
       "id": "q17_acronym_rpms",
       "question": "In the FY21\u201323 report acronyms list, what does RPMS stand for?",
       "reference_answer": "Real Property Management System",
-      "answer": "In the FY21\u201123 report\u2019s acronyms list, **RPMS** stands for **Real Property Management System**\u3010Page\u202f8,\u202feo13287_nasareport_2023.pdf\u3011.",
+      "answer": "Based on the acronyms list in the report, RPMS stands for **Real Property Management System** (Page 8, Source: eo13287_nasareport_2023.pdf).",
       "sources": [
         {
           "page": 8,
-          "score": 0.9659,
+          "score": 0.9742,
           "source": "eo13287_nasareport_2023.pdf",
           "text": "Acronyms vi EO 13287 Section 3 Triennial Report (FY21\u201323) RPMS Real Property Management System RSF Resource Significance Framework RTF Reduce the Footprint SHPO State Historic Preservation Office SLS Space Launch System SOI Secretary of the Interior SSC Stennis Space Center SSFL Santa Susana Field Laboratory STEM Science, Technology, Engineering, Mathematics TCP Traditional Cultural Property TCL Traditional Cultural Landscape TDAT Tribal Directory Assessment Tool THPO Tribal Historic Preservation Officer UAV Unmanned Aerial Vehicle UTTR Utah Test and Training Range VAB Vehicle Assembly Building WFF Wallops Flight Facility WSTF White Sands Test Facility"
+        },
+        {
+          "page": 25,
+          "score": 0.7089,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": ". It is anticipated to be completed in FY24. In FY23, NASA updated the NETS system to include the following information for each property: \u2022 Resource Significance Framework (RSF) model score, for unevaluated properties less than 50 years old, discussed more in Section 3; \u2022 HTSF status, based on the 2021 HTSF Inventory, discussed more in Section 3; and \u2022 Asset Management Category, as defined under the draft APA. When the APA is executed, these data fields will assist CRMs in the identification and management of those resources. RPMS NETS data is integrated into the NASA RPMS, a database routinely consulted by real property managers, master planners, Project Managers, and facilities and maintenance staff"
         }
       ],
       "metadata": {
@@ -480,25 +472,49 @@
       },
       "metrics": {
         "correctness": 1.0,
-        "groundedness": 0.6666666666666666,
+        "groundedness": 0.7619047619047619,
         "citation_quality": 1.0,
         "completeness": 1.0,
         "retrieval_recall": 1.0,
-        "latency_sec": 17.297868251800537,
-        "weighted_rag_score": 0.9166666666666667
+        "latency_sec": 18.671665906906128,
+        "weighted_rag_score": 0.9404761904761905
       }
     },
     {
       "id": "q18_acronym_nets",
       "question": "In the FY21\u201323 report acronyms list, what does NETS stand for?",
       "reference_answer": "NASA Environmental Tracking System",
-      "answer": "The excerpt from page\u202f6 of the FY\u202f21\u201123 Triennial Report\u2019s acronyms list does not include an entry for **NETS**\u2014the list shows acronyms such as ACHP, AFB, AFRC, AMP, APA, ARC, ARPA, ATF, CCG, CoP, COVID\u201119, CRM, CMP, DAF, DoD, EMD, EO, ESA, EUL, FRED, FPO, FY, etc., but **NETS** is not defined there. Therefore, the meaning of NETS is not provided in the supplied excerpts. (Page\u202f6)",
+      "answer": "Based on the provided excerpts, the acronyms list (found on page 6) does not include a definition for **NETS**. Therefore, the answer is not in the provided excerpts.",
       "sources": [
         {
+          "page": 25,
+          "score": 0.9826,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": "NASA\u2019s CRM Program EO 13287 Section 3 Triennial Report (FY21\u201323) 17 by the other Centers and by NASA HQ. This document-sharing ability facilitates the transfer of knowledge among the NASA CRM community. NETS\u2019 final key feature is in internal and external reporting. The data stored in NETS can be used to generate reports to aid in the management of NASA\u2019s resources. NETS also allows NASA HQ to issue and manage data calls to the Centers to assist in meeting reporting requirements on a number of cultural resources topics, including property inventories and status, archaeological surveys, consultation results, and heritage tourism activities"
+        },
+        {
+          "page": 25,
+          "score": 0.9102,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": ". Center CRMs are responsible for ensuring the data in NETS is accurate and up-to-date, reflecting the most recent surveys and determinations of eligibility. NETS data is assessed at least annually; however, in FY23 NASA initiated a thorough review of all NETS data and corresponding documentation. This review, which will compare each property record in NETS against its survey report, evaluation, concurrence, applicable agreement documents, and other related materials, will ensure the accuracy and fidelity of the data. It is anticipated to be completed in FY24"
+        },
+        {
           "page": 6,
-          "score": 0.9029,
+          "score": 0.8978,
           "source": "eo13287_nasareport_2023.pdf",
           "text": "Acronyms iv EO 13287 Section 3 Triennial Report (FY21\u201323) ACRONYMS ACHP Advisory Council on Historic Preservation AFB Air Force Base AFRC Armstrong Flight Research Center AMP Agency Master Plan APA Agency-wide Programmatic Agreement ARC Ames Research Center ARPA Archaeological Resources Protection Act ATF Armstrong Test Facility (formerly Plum Brook Station) CCG Criteria Consideration G CoP Community of Practice COVID-19 SARS-CoV-2, 2019 Novel Coronavirus CRM Cultural Resources Manager/Cultural Resources Management CMP Center Master Plan DAF Department of the Air Force DoD Department of Defense EMD Environmental Management Division EO Executive Order ESA European Space Agency EUL Enhanced Use Lease FRED Facilities and Real Estate Division FPO Federal Preservation Officer FY Fiscal Year"
+        },
+        {
+          "page": 3,
+          "score": 0.8749,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": "Table of Contents i EO 13287 Section 3 Triennial Report (FY21\u201323) ACRONYMS IV SECTION ONE OVERVIEW ................................................................................................................... 1 1.1 Report Organization .....................................................................................1 1.2 A Different Kind of Preservation .................................................................1 1.3 Familiar Challenges, New Solutions ............................................................4 SECTION TWO NASA\u2019S CRM PROGRAM ..........................................................................................."
+        },
+        {
+          "page": 25,
+          "score": 0.8528,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": ". It is anticipated to be completed in FY24. In FY23, NASA updated the NETS system to include the following information for each property: \u2022 Resource Significance Framework (RSF) model score, for unevaluated properties less than 50 years old, discussed more in Section 3; \u2022 HTSF status, based on the 2021 HTSF Inventory, discussed more in Section 3; and \u2022 Asset Management Category, as defined under the draft APA. When the APA is executed, these data fields will assist CRMs in the identification and management of those resources. RPMS NETS data is integrated into the NASA RPMS, a database routinely consulted by real property managers, master planners, Project Managers, and facilities and maintenance staff"
         }
       ],
       "metadata": {
@@ -508,19 +524,19 @@
       },
       "metrics": {
         "correctness": 0.0,
-        "groundedness": 0.5087719298245614,
+        "groundedness": 0.47619047619047616,
         "citation_quality": 1.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 17.08071231842041,
-        "weighted_rag_score": 0.2771929824561403
+        "latency_sec": 82.96564888954163,
+        "weighted_rag_score": 0.26904761904761904
       }
     },
     {
       "id": "q19_acronym_htsf",
       "question": "What does the acronym HTSF stand for in these reports?",
       "reference_answer": "Highly Technical or Scientific Facilities",
-      "answer": "The acronym **HTSF** stands for **\u201cHighly Technical or Scientific Facilities.\u201d**\u202fThis definition is given in the excerpt that notes the study builds on the 1991 ACHP publication \u201cBalancing Historic Preservation Needs with the Operations of **Highly Technical or Scientific Facilities**\u201d and that NASA developed criteria for identifying facilities that qualify as HTSF\u202f\u3010Page\u202f33, eo13287_nasareport_2023.pdf\u3011.",
+      "answer": "Based on the provided excerpt, the acronym HTSF stands for **Highly Technical or Scientific Facilities** (Page 33, `eo13287_nasareport_2023.pdf`).",
       "sources": [
         {
           "page": 33,
@@ -536,25 +552,25 @@
       },
       "metrics": {
         "correctness": 1.0,
-        "groundedness": 0.7954545454545454,
+        "groundedness": 0.65,
         "citation_quality": 1.0,
         "completeness": 1.0,
         "retrieval_recall": 1.0,
-        "latency_sec": 14.508110046386719,
-        "weighted_rag_score": 0.9488636363636365
+        "latency_sec": 17.530390977859497,
+        "weighted_rag_score": 0.9125000000000001
       }
     },
     {
       "id": "q20_amp_asset_buckets_list",
       "question": "In the FY21\u201323 report, what are the four AMP Asset Inventory Assessment buckets shown in the mission/condition relevance matrix?",
       "reference_answer": "Invest, Sustain, Outgrant/Repurpose, and Divest",
-      "answer": "The excerpt you provided only defines two of the buckets in the matrix:\n\n* **Sustain** \u2013 assets with clear mission significance, a future need, and good condition.  \n* **Invest** \u2013 assets with high mission significance, a future need, and poor condition.\n\nThese definitions appear on page\u202f14 of the FY\u202f21\u201123 report\u3010Page\u202f14, eo13287_nasareport_2023.pdf\u3011.\n\nThe other two buckets that are typically shown in the AMP Asset Inventory Assessment (AIA) mission/condition relevance matrix (e.g., \u201cOutgrant/Repurpose\u201d and \u201cDivest\u201d) are **not mentioned in the excerpts you provided**. Therefore, based solely on the supplied material, I can only confirm the \u201cSustain\u201d and \u201cInvest\u201d buckets; the remaining two buckets are not identified in the given text.",
+      "answer": "Based on the provided excerpt, the four AMP Asset Inventory Assessment buckets are:\n\n1. **sustain**\n2. **invest**\n3. **outgrant/repurpose**\n4. **divest**\n\n(Source: Page 13, eo13287_nasareport_2023.pdf)",
       "sources": [
         {
-          "page": 14,
-          "score": 0.9954,
+          "page": 13,
+          "score": 0.975,
           "source": "eo13287_nasareport_2023.pdf",
-          "text": "Overview EO 13287 Section 3 Triennial Report (FY21\u201323) 6 Figure 1-1. AMP Asset Bucket Assignment \u2013 Mission/Condition Relevance Matrix. Sustain: These real property assets have clear mission significance, a future need, and are in good condition. The goal is to continue general maintenance to sustain these assets in their current condition. No major/significant investments are known to be needed. Section 106 undertakings on this path may include routine maintenance and repair to occur as need and funding arises. Invest: These real property assets have high mission significance, a future need, and are in poor condition. The goal is to rehabilitate these assets to a mission ready condition"
+          "text": ". The AMP is the first time that NASA has taken on an enterprise approach to planning the entire agency real property portfolio, addressing broader agency challenges, engaging mission stakeholders effectively, establishing clear links to the Agency-wide budget, and identifying specific desired outcomes for all real property for the next 20 years. A key component of the AMP process is the Asset Inventory Assessment (AIA). During the assessment, each real property asset is reviewed and given a score based on its mission relevance and facility condition. The score is used to determine which of the four buckets it is assigned: sustain, invest, outgrant/repurpose, and divest. (Figure 1-1). Each bucket is described in more detail below."
         }
       ],
       "metadata": {
@@ -563,79 +579,85 @@
         "difficulty": "medium"
       },
       "metrics": {
-        "correctness": 1.0,
-        "groundedness": 0.4084507042253521,
+        "correctness": 0.8333333333333334,
+        "groundedness": 0.6785714285714286,
         "citation_quality": 1.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 18.478492259979248,
-        "weighted_rag_score": 0.652112676056338
+        "latency_sec": 32.8880500793457,
+        "weighted_rag_score": 0.6529761904761905
       }
     },
     {
       "id": "q21_invest_bucket_definition",
       "question": "According to the AMP description, what is the goal for assets assigned to the Invest bucket?",
       "reference_answer": "These assets have high mission significance, a future need, and are in poor condition; the goal is to rehabilitate them to a mission\u2011ready condition through renovation, repair, and new construction.",
-      "answer": "I couldn't find relevant information in your documents to answer this question.",
-      "sources": [],
+      "answer": "Based on the provided excerpts, the exact goal for assets assigned to the \"Invest\" bucket is not mentioned (the text only states that assets are assigned to the \"invest\" bucket based on their mission relevance and facility condition [Page 13]). Therefore, the answer is not found in the provided excerpts.",
+      "sources": [
+        {
+          "page": 13,
+          "score": 0.9848,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": ". The AMP is the first time that NASA has taken on an enterprise approach to planning the entire agency real property portfolio, addressing broader agency challenges, engaging mission stakeholders effectively, establishing clear links to the Agency-wide budget, and identifying specific desired outcomes for all real property for the next 20 years. A key component of the AMP process is the Asset Inventory Assessment (AIA). During the assessment, each real property asset is reviewed and given a score based on its mission relevance and facility condition. The score is used to determine which of the four buckets it is assigned: sustain, invest, outgrant/repurpose, and divest. (Figure 1-1). Each bucket is described in more detail below."
+        },
+        {
+          "page": 13,
+          "score": 0.1584,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": ". In order to meet these requirements, and to address the specific challenges of NASA\u2019s aging infrastructure, a federal funding gap, and large property holdings, NASA has initiated a new approach to right-size its portfolio, the Agency Master Plan (AMP). Agency Master Plan NASA has identified the need for a more integrated approach to master planning, in which individual Center planning objectives are considered within the broader context of Agency priorities. The purpose of the AMP is to establish an Agency-wide, mission-driven approach with a 20-year horizon that ensures NASA real property assets are mission- ready, reliable, and affordable"
+        },
+        {
+          "page": 13,
+          "score": 0.1178,
+          "source": "eo13287_nasareport_2023.pdf",
+          "text": ". The overarching goals of the NASA AMP are to 1) identify a mission-driven facility portfolio that is adaptable to transformation; 2) establish a repeatable master planning process with consistent stakeholder engagement and accountability; 3) identify actions to achieve an affordable facility portfolio including reduction of unnecessary redundancies, consolidation, and modernization; 4) identify actions to help proactively mitigate risk to mission; 5) prioritize sustainability best practices; and 6) establish planning principles that help sustain and create facilities and sites that inspire the NASA workforce"
+        }
+      ],
       "metadata": {
         "doc": "nasa_2023_triennial",
         "type": "lookup",
         "difficulty": "hard"
       },
       "metrics": {
-        "correctness": 0.07692307692307693,
-        "groundedness": 0.0,
-        "citation_quality": 0.0,
+        "correctness": 0.38461538461538464,
+        "groundedness": 0.5454545454545454,
+        "citation_quality": 1.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 17.748637199401855,
-        "weighted_rag_score": 0.03076923076923077
+        "latency_sec": 25.037693977355957,
+        "weighted_rag_score": 0.44020979020979023
       }
     },
     {
       "id": "q22_divest_bucket_role_of_historic_properties",
       "question": "In the AMP framework, how are historic properties on the Divest list treated, and what does this imply for Section 106 undertakings?",
       "reference_answer": "Historic properties on the Divest list are placed on a \u201cpath to divestment\u201d and require additional consideration of alternatives to avoid the adverse effects of partial or complete demolition under Section 106.",
-      "answer": "In the Agency\u2011wide Master Plan (AMP) any historic property that ends up on the **Divest** list is not simply marked for disposal.\u202fIt is placed in a special **\u201cpath to divestment\u201d sub\u2011category**, which signals that the property must receive extra review of alternatives so that partial or total demolition is avoided whenever possible\u3010Page\u202f14, eo13287_nasareport_2023.pdf\u3011.  \n\nBecause it is on this \u201cdivest\u201d path, the types of actions that can be taken under **Section\u202f106** are limited to those listed for the divest pathway:  \n\n- **Mothballing**  \n- **Abandonment**  \n- **Resource transfer** to federal or non\u2011federal entities  \n- **Demolition**  \n\nThese are the only Section\u202f106 undertakings contemplated for historic properties on the Divest list\u3010Page\u202f14, eo13287_nasareport_2023.pdf\u3011.",
-      "sources": [
-        {
-          "page": 14,
-          "score": 0.9895,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": ". The goal is to terminate NASA ownership of these assets. Historic properties on the Divest list are placed in a \u201cpath to divestment\u201d subcategory, indicating that they require additional consideration of alternatives to avoid the adverse effects of partial or complete demolition. Section 106 undertakings on the \u201cdivest\u201d path include mothballing, abandonment, resource transfer to federal and non-federal entities, and demolition. Initial AIA lists were developed in 2021 using facility condition data tracked in NASA\u2019s Real Property Management System (RPMS) and Mission Relevance (MR) data collected through a data call, followed by a robust adjudication process"
-        },
-        {
-          "page": 14,
-          "score": 0.6113,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": ". The goal is to rehabilitate these assets to a mission ready condition. Section 106 undertakings on this path may include renovation/modification, major repair, and new construction. Outgrant/Repurpose: These real property assets have low mission significance and no future need but are in good condition. The goal is to keep these assets and enable their availability for use by NASA partners, or to repurpose the assets for a higher mission need. Section 106 undertakings on this path include outgrants to federal or non-federal entities. Divest: These real property assets have a low mission significance, no future need, and are in poor condition. The goal is to terminate NASA ownership of these assets"
-        }
-      ],
+      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "sources": [],
       "metadata": {
         "doc": "nasa_2023_triennial",
         "type": "policy",
         "difficulty": "hard"
       },
       "metrics": {
-        "correctness": 0.7142857142857143,
-        "groundedness": 0.475,
-        "citation_quality": 1.0,
-        "completeness": 1.0,
-        "retrieval_recall": 1.0,
-        "latency_sec": 17.07173490524292,
-        "weighted_rag_score": 0.7544642857142858
+        "correctness": 0.03571428571428571,
+        "groundedness": 0.0,
+        "citation_quality": 0.0,
+        "completeness": 0.0,
+        "retrieval_recall": 0.0,
+        "latency_sec": 14.618109226226807,
+        "weighted_rag_score": 0.014285714285714285
       }
     },
     {
       "id": "q23_man_in_space_theme_study_result",
       "question": "What key outcome of the National Historic Landmark Theme Study Man in Space is highlighted in the overview section of the FY21\u201323 report?",
       "reference_answer": "The study resulted in the designation of 24 National Historic Landmarks, 20 of which were NASA\u2011owned resources associated with the Apollo Program and mostly less than 50 years old.",
-      "answer": "The overview notes that the **Man\u202fin\u202fSpace NHL Theme Study led to the designation of 24 National Historic Landmarks (including 20 NASA\u2011owned Apollo\u2011Program resources) and, as a direct result, NASA executed its first Section\u202f106 agreement with the Advisory Council on Historic Preservation (ACHP), requiring consultation with State Historic Preservation Offices before any alteration of those newly\u2011identified NHLs**\u3010Page\u202f11, eo13287_nasareport_2023.pdf\u3011.",
+      "answer": "Based on the provided excerpt, the key outcomes of the *Man in Space* National Historic Landmark Theme Study highlighted in the overview are:\n\n1. The designation of 24 NHLs, of which 20 were NASA-owned resources associated with the Apollo Program (and the majority being less than 50 years of age) (p. 11).\n2. As a result of the study, NASA executed its first Section 106 agreement with the ACHP, which requires NASA to consult with the appropriate State Historic Preservation Offices (SHPO) prior to altering any of the newly identified NHLs, and stipulates documentation to be completed prior to alteration (p. 11).",
       "sources": [
         {
           "page": 11,
-          "score": 0.9894,
+          "score": 0.9893,
           "source": "eo13287_nasareport_2023.pdf",
           "text": "Overview EO 13287 Section 3 Triennial Report (FY21\u201323) 3 National Historic Landmark (NHL) Theme Study Man in Space, published in 1985, which resulted in the designation of 24 NHLs, 20 of which were NASA-owned resources associated with the Apollo Program and the majority of which were less than 50 years of age.5 As a result of the study, NASA executed its first Section 106 agreement with the ACHP that requires NASA to consult with the appropriate State Historic Preservation Offices (SHPO) prior to altering any of the newly identified NHLs, and stipulated documentation to be completed prior to alteration"
         }
@@ -646,13 +668,13 @@
         "difficulty": "medium"
       },
       "metrics": {
-        "correctness": 0.6296296296296297,
-        "groundedness": 0.7627118644067796,
+        "correctness": 0.8518518518518519,
+        "groundedness": 0.8055555555555556,
         "citation_quality": 1.0,
         "completeness": 1.0,
         "retrieval_recall": 1.0,
-        "latency_sec": 14.657787084579468,
-        "weighted_rag_score": 0.7925298179535467
+        "latency_sec": 30.12604308128357,
+        "weighted_rag_score": 0.8921296296296297
       }
     },
     {
@@ -672,7 +694,7 @@
         "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 23.073753833770752,
+        "latency_sec": 29.486060619354248,
         "weighted_rag_score": 0.0
       }
     },
@@ -680,13 +702,13 @@
       "id": "q25_triennial_report_sequence",
       "question": "According to the FY21\u201323 overview, how many EO 13287 Section 3 reports has NASA prepared under the order, and which reporting periods or years are mentioned as previous submissions?",
       "reference_answer": "The FY21\u201323 report is the eighth report prepared by NASA under EO 13287; earlier submissions include a baseline report in 2004, a progress report in 2005, and triennial reports in 2008, 2011, 2014, 2017, and 2020.",
-      "answer": "NASA has prepared **eight** EO\u202f13287 Section\u202f3 reports in total.\u202fThe FY\u202f21\u201123 triennial report is the latest, and the earlier submissions listed in the overview are:\n\n* a baseline report in **2004**  \n* a progress report in **2005**  \n* triennial reports for **2008**, **2011**, **2014**, **2017**, and **2020**  \n\nThese prior reports are identified on page\u202f9 of the document\u3010Page\u202f9, eo13287_nasareport_2023.pdf\u3011.",
+      "answer": "According to the FY21\u201323 overview, NASA has prepared **eight** EO 13287 Section 3 reports under the order [Page 9, eo13287_nasareport_2023.pdf]. \n\nThe previous submissions mentioned are:\n* A baseline report in **2004** [Page 9, eo13287_nasareport_2023.pdf]\n* A progress report in **2005** [Page 9, eo13287_nasareport_2023.pdf]\n* Triennial reports in **2008, 2011, 2014, 2017, and 2020** [Page 9, eo13287_nasareport_2023.pdf]",
       "sources": [
         {
           "page": 9,
-          "score": 0.9882,
+          "score": 0.9945,
           "source": "eo13287_nasareport_2023.pdf",
-          "text": ". It is preceded by a baseline report in 2004, a progress report in 2005, and triennial reports in 2008, 2011, 2014, 2017, and 2020. This report covers the three-year period from fiscal year (FY) 2021 to 2023. 1.1 REPORT ORGANIZATION This triennial report has been prepared for the FY21\u201323 reporting period consistent with the ACHP May 2023 Advisory Guidelines Implementing Executive Order 13287, \u201cPreserve America\u201d Section 3: Reporting Progress on the Identification, Protection, and Use of Federal Historic Properties (ACHP Guidelines). The 2023 ACHP Guidelines continue to follow the simplified guidelines of 2020 with fewer questions and a deemphasis on quantitative data"
+          "text": "Overview EO 13287 Section 3 Triennial Report (FY21\u201323) 1 SECTION ONE OVERVIEW This report is submitted to the Advisory Council on Historic Preservation (ACHP) by the National Aeronautics and Space Administration (NASA) in compliance with Executive Order (EO) 13287, entitled Preserve America. Section 3 of EO 13287 requires NASA to submit a triennial report on its progress in identifying, protecting, and using historic properties in the agency\u2019s ownership, as mandated by the National Historic Preservation Act (NHPA) of 1966, as amended. This report is the eighth report prepared by NASA under the EO. It is preceded by a baseline report in 2004, a progress report in 2005, and triennial reports in 2008, 2011, 2014, 2017, and 2020"
         }
       ],
       "metadata": {
@@ -696,23 +718,23 @@
       },
       "metrics": {
         "correctness": 0.8275862068965517,
-        "groundedness": 0.6458333333333334,
+        "groundedness": 0.7804878048780488,
         "citation_quality": 1.0,
         "completeness": 1.0,
         "retrieval_recall": 1.0,
-        "latency_sec": 19.124133110046387,
-        "weighted_rag_score": 0.842492816091954
+        "latency_sec": 25.94717288017273,
+        "weighted_rag_score": 0.8761564339781329
       }
     },
     {
       "id": "irm2023_01",
       "question": "In what year was Iron Mountain Incorporated founded, and where?",
       "reference_answer": "1951, in an underground facility near Hudson, New York",
-      "answer": "Iron Mountain Incorporated was founded in **1951** in an underground facility **near Hudson, New\u202fYork**\u3010Page\u202f6, NYSE_IRM_2023.pdf\u3011.",
+      "answer": "Iron Mountain Incorporated was founded in **1951** in an underground facility **near Hudson, New York** (Page 6, NYSE_IRM_2023.pdf).",
       "sources": [
         {
           "page": 6,
-          "score": 0.9997,
+          "score": 0.9993,
           "source": "NYSE_IRM_2023.pdf",
           "text": ". Founded in an underground facility near Hudson, New York in 1951, Iron Mountain Incorporated, a Delaware corporation (\"IMI\"), has more than 225,000 customers in a variety of industries in 60 countries around the world, as of December 31, 2023. We currently serve customers across an array of market verticals - commercial, legal, financial, healthcare, insurance, life sciences, energy, business services, entertainment and government organizations, including more than 90% of the Fortune 1000. As of December 31, 2023, we employed approximately 27,000 people. We are listed on the New York Stock Exchange (the \"NYSE\") and are a constituent of the Standard & Poor\u2019s 500 Index and the Morgan Stanley Capital International (\"MSCI\") REIT index"
         }
@@ -728,7 +750,7 @@
         "citation_quality": 1.0,
         "completeness": 1.0,
         "retrieval_recall": 1.0,
-        "latency_sec": 20.273761987686157,
+        "latency_sec": 20.0189790725708,
         "weighted_rag_score": 0.9625000000000001
       }
     },
@@ -749,7 +771,7 @@
         "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 17.29071807861328,
+        "latency_sec": 53.62382507324219,
         "weighted_rag_score": 0.0
       }
     },
@@ -757,8 +779,14 @@
       "id": "irm2023_03",
       "question": "What were Iron Mountain's total revenues for the year ended December 31, 2023, and what was the percentage increase over 2022?",
       "reference_answer": "$5,480,289 thousand (approximately $5.48 billion), a 7.4% increase over 2022",
-      "answer": "Iron\u202fMountain reported **total revenues of $5,480,289\u202f(thousand)** for the year ended\u202fDecember\u202f31\u202f2023.  This was a **7.4\u202f% increase** compared with the $5,103,574\u202f(thousand) recorded in 2022\u3010Page\u202f44, NYSE_IRM_2023.pdf\u3011.",
+      "answer": "For the year ended December 31, 2023, Iron Mountain's total revenues were $5,480,289 (in thousands) [Page 44, Source: NYSE_IRM_2023.pdf]. This represents a percentage increase of 7.4% over the revenues for 2022, which were $5,103,574 (in thousands) [Page 44, Source: NYSE_IRM_2023.pdf].",
       "sources": [
+        {
+          "page": 45,
+          "score": 0.9989,
+          "source": "NYSE_IRM_2023.pdf",
+          "text": ". Our organic revenue growth rate includes the impact of acquisitions of customer relationships. TOTAL REVENUES For the year ended December 31, 2023, the increase in reported revenue was primarily driven by organic storage rental revenue growth. Foreign currency exchange rate fluctuations decreased our reported revenue growth rate by 0.2% in the year ended December 31, 2023 compared to the prior year period. STORAGE RENTAL REVENUE AND SERVICE REVENUE Table of Contents Part II 40 IRON MOUNTAIN 2023 FORM 10-K"
+        },
         {
           "page": 44,
           "score": 0.9987,
@@ -767,9 +795,9 @@
         },
         {
           "page": 45,
-          "score": 0.9831,
+          "score": 0.978,
           "source": "NYSE_IRM_2023.pdf",
-          "text": "REVENUES Total revenues consist of the following (in thousands): YEAR ENDED DECEMBER 31, PERCENTAGE CHANGE 2023 2022 DOLLAR CHANGE ACTUAL CONSTANT CURRENCY(1) IMPACT OF ACQUISITIONS ORGANIC GROWTH(2) Storage Rental $ 3,370,645 $ 3,034,023 $ 336,622 11.1 % 11.2 % 0.7 % 10.5 % Service 2,109,644 2,069,551 40,093 1.9 % 2.2 % 0.6 % 1.6 % Total Revenues $ 5,480,289 $ 5,103,574 $ 376,715 7.4 % 7.6 % 0.7 % 6.9 % (1) Constant currency growth rate, which is a non-GAAP measure, is calculated by translating the 2022 results at the 2023 average exchange rates. (2) Our organic revenue growth rate, which is a non-GAAP measure, represents the year-over-year growth rate of our revenues excluding the impact of business acquisitions, divestitures and foreign currency exchange rate fluctuations"
+          "text": "REVENUES Total revenues consist of the following (in thousands): YEAR ENDED DECEMBER 31, PERCENTAGE CHANGE 2023 2022 DOLLAR CHANGE ACTUAL CONSTANT CURRENCY(1) IMPACT OF ACQUISITIONS ORGANIC GROWTH(2) Service 2,109,644 2,069,551 40,093 1.9 % 2.2 % 0.6 % 1.6 % (1) Constant currency growth rate, which is a non-GAAP measure, is calculated by translating the 2022 results at the 2023 average exchange rates. (2) Our organic revenue growth rate, which is a non-GAAP measure, represents the year-over-year growth rate of our revenues excluding the impact of business acquisitions, divestitures and foreign currency exchange rate fluctuations. Our organic revenue growth rate includes the impact of acquisitions of customer relationships"
         }
       ],
       "metadata": {
@@ -779,12 +807,12 @@
       },
       "metrics": {
         "correctness": 0.6923076923076923,
-        "groundedness": 0.7428571428571429,
+        "groundedness": 0.8648648648648649,
         "citation_quality": 1.0,
         "completeness": 0.6666666666666666,
         "retrieval_recall": 0.6666666666666666,
-        "latency_sec": 21.98823094367981,
-        "weighted_rag_score": 0.745970695970696
+        "latency_sec": 25.282114028930664,
+        "weighted_rag_score": 0.7764726264726265
       }
     },
     {
@@ -804,7 +832,7 @@
         "citation_quality": 0.0,
         "completeness": 0.0,
         "retrieval_recall": 0.0,
-        "latency_sec": 33.21011400222778,
+        "latency_sec": 47.44691491127014,
         "weighted_rag_score": 0.0
       }
     },
@@ -812,29 +840,48 @@
       "id": "irm2023_05",
       "question": "What does the acronym CSIRP stand for in Iron Mountain's cybersecurity disclosures, and what is it?",
       "reference_answer": "Cyber Security Incident Response Plan; the detailed plan the information security team uses to respond to cybersecurity incidents",
-      "answer": "I couldn't find relevant information in your documents to answer this question.",
-      "sources": [],
+      "answer": "Based on the provided excerpt, CSIRP stands for **\"cyber security incident response plan\"** (Page 25, NYSE_IRM_2023.pdf). \n\nIt is a detailed plan used by Iron Mountain's information security team to respond to cybersecurity incidents, and it is based on industry best practices, relevant legal requirements, and contractual commitments (Page 25, NYSE_IRM_2023.pdf).",
+      "sources": [
+        {
+          "page": 25,
+          "score": 0.9608,
+          "source": "NYSE_IRM_2023.pdf",
+          "text": ". As part of our information security program, we also actively monitor emerging cyber attack patterns to develop custom detection capabilities and mitigation techniques to protect against material risk of cybersecurity threats. Upon encountering a cybersecurity incident, our information security team responds using our detailed cyber security incident response plan (\u201cCSIRP\u201d), which is based on industry best practices, relevant legal requirements and our contractual commitments"
+        }
+      ],
       "metadata": {
         "doc": "iron_mountain_2023",
         "type": "acronym",
         "difficulty": "medium"
       },
       "metrics": {
-        "correctness": 0.14285714285714285,
-        "groundedness": 0.0,
-        "citation_quality": 0.0,
-        "completeness": 0.0,
-        "retrieval_recall": 0.0,
-        "latency_sec": 18.74411106109619,
-        "weighted_rag_score": 0.05714285714285714
+        "correctness": 0.9285714285714286,
+        "groundedness": 0.6511627906976745,
+        "citation_quality": 1.0,
+        "completeness": 1.0,
+        "retrieval_recall": 1.0,
+        "latency_sec": 43.98970699310303,
+        "weighted_rag_score": 0.8842192691029902
       }
     },
     {
       "id": "irm2023_06",
       "question": "As a REIT, what minimum percentage of its REIT taxable income is Iron Mountain generally required to distribute to stockholders each year to remain qualified for REIT taxation?",
       "reference_answer": "At least 90% of its REIT taxable income",
-      "answer": "Iron\u202fMountain must distribute **at least 90\u202f% of its REIT taxable income** each year to remain qualified for REIT taxation\u3010Page\u202f22, NYSE_IRM_2023.pdf\u3011.",
+      "answer": "To remain qualified for taxation as a REIT, Iron Mountain is generally required to distribute at least **90%** of its REIT taxable income to stockholders each year (or in limited circumstances, the following year) [Pages 22 and 24, NYSE_IRM_2023.pdf].",
       "sources": [
+        {
+          "page": 22,
+          "score": 0.9942,
+          "source": "NYSE_IRM_2023.pdf",
+          "text": "As a REIT, failure to make required distributions would subject us to federal corporate income tax. We expect to continue paying regular quarterly distributions; however, the amount, timing and form of our regular quarterly distributions will be determined, and will be subject to adjustment, by our board of directors. To remain qualified for taxation as a REIT, we are generally required to distribute at least 90% of our REIT taxable income (determined without regard to the dividends paid deduction and excluding net capital gain) each year, or in limited circumstances, the following year, to our stockholders. Generally, we expect to distribute all or substantially all of our REIT taxable income"
+        },
+        {
+          "page": 24,
+          "score": 0.9908,
+          "source": "NYSE_IRM_2023.pdf",
+          "text": ". We cannot predict with certainty whether, when, in what forms, or with what effective dates, the tax laws, regulations, administrative interpretations or local laws applicable to us may be changed or if such laws would impact our ability to remain qualified for taxation as a REIT or the costs of doing so. GENERAL RISK FACTORS Our cash distributions are not guaranteed and may fluctuate. As a REIT, we are generally required to distribute at least 90% of our REIT taxable income to our stockholders. Furthermore, we are committed to growing our dividends, and have stated this publicly"
+        },
         {
           "page": 22,
           "score": 0.9846,
@@ -849,141 +896,85 @@
       },
       "metrics": {
         "correctness": 1.0,
-        "groundedness": 0.52,
+        "groundedness": 0.8421052631578947,
         "citation_quality": 1.0,
         "completeness": 0.5,
         "retrieval_recall": 0.5,
-        "latency_sec": 20.373225927352905,
-        "weighted_rag_score": 0.78
+        "latency_sec": 45.45692801475525,
+        "weighted_rag_score": 0.8605263157894737
       }
     },
     {
       "id": "irm2023_07",
       "question": "When was Project Matterhorn announced, and how much did Iron Mountain expect to incur annually in related costs from 2023 through 2025?",
       "reference_answer": "Announced in September 2022; approximately $150.0 million in costs annually from 2023 through 2025",
-      "answer": "Project Matterhorn was announced **in September\u202f2022**\u3010Page\u202f7, NYSE_IRM_2023.pdf\u3011\u3010Page\u202f33, NYSE_IRM_2023.pdf\u3011.  \n\nIron\u202fMountain said it expected to incur **about\u202f$150\u202fmillion per year** in costs related to Project Matterhorn for each year from **2023 through 2025**\u3010Page\u202f7, NYSE_IRM_2023.pdf\u3011\u3010Page\u202f33, NYSE_IRM_2023.pdf\u3011.",
-      "sources": [
-        {
-          "page": 7,
-          "score": 0.9995,
-          "source": "NYSE_IRM_2023.pdf",
-          "text": ". PROJECT MATTERHORN In September 2022, we announced a global program designed to accelerate the growth of our business (\"Project Matterhorn\"). Project Matterhorn investments focus on transforming our operating model to a global operating model. Project Matterhorn focuses on the formation of a solution-based sales approach that is designed to allow us to optimize our shared services and best practices to better serve our customers' needs. We are investing to accelerate growth and to capture a greater share of the large, global addressable markets in which we operate. We expect to incur approximately $150.0 million in costs annually related to Project Matterhorn from 2023 through 2025"
-        },
-        {
-          "page": 33,
-          "score": 0.9994,
-          "source": "NYSE_IRM_2023.pdf",
-          "text": "OVERVIEW PROJECT MATTERHORN In September 2022, we announced Project Matterhorn, a global program designed to accelerate the growth of our business. Project Matterhorn investments focus on transforming our operating model to a global operating model. Project Matterhorn focuses on the formation of a solution-based sales approach that is designed to allow us to optimize our shared services and best practices to better serve our customers' needs. We are investing to accelerate growth and to capture a greater share of the large, global addressable markets in which we operate. We expect to incur approximately $150.0 million in costs annually related to Project Matterhorn from 2023 through 2025"
-        }
-      ],
+      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "sources": [],
       "metadata": {
         "doc": "iron_mountain_2023",
         "type": "timeline",
         "difficulty": "easy"
       },
       "metrics": {
-        "correctness": 0.7857142857142857,
-        "groundedness": 0.5757575757575758,
-        "citation_quality": 1.0,
-        "completeness": 0.3333333333333333,
-        "retrieval_recall": 0.6666666666666666,
-        "latency_sec": 17.600589990615845,
-        "weighted_rag_score": 0.6748917748917749
+        "correctness": 0.07142857142857142,
+        "groundedness": 0.0,
+        "citation_quality": 0.0,
+        "completeness": 0.0,
+        "retrieval_recall": 0.0,
+        "latency_sec": 59.61641335487366,
+        "weighted_rag_score": 0.02857142857142857
       }
     },
     {
       "id": "irm2023_08",
       "question": "For fiscal year 2023, what percentage of Iron Mountain's total company revenues came from the Global RIM Business segment? (Use total revenues and Global RIM Business segment revenue figures.)",
       "reference_answer": "Approximately 85% (Global RIM Business segment revenue of $4,661,776 thousand divided by total revenues of $5,480,289 thousand)",
-      "answer": "**Answer**\n\n- **Global\u202fRIM Business segment revenue (2023):**\u202f$4,661,776\u202f(thousands)\u3010Page\u202f51, NYSE_IRM_2023.pdf\u3011  \n- **Iron\u202fMountain total company revenue (2023):**\u202f$5,480,289\u202f(thousands) \u2013 obtained by adding the geographic revenue figures listed on page\u202f128 (U.S. $3,507,134\u202fk + U.K. $393,917\u202fk + Canada $279,325\u202fk + Australia $143,815\u202fk + Remaining Countries $1,156,098\u202fk = $5,480,289\u202fk)\u3010Page\u202f128, NYSE_IRM_2023.pdf\u3011\n\n**Calculation**\n\n\\[\n\\frac{\\text{Global\u202fRIM revenue}}{\\text{Total revenue}} \\times 100\n= \\frac{4,661,776}{5,480,289} \\times 100\n\\approx 85.1\\%\n\\]\n\n**Result**\n\nApproximately **85\u202f%** of Iron\u202fMountain\u2019s total 2023 company revenues were generated by the **Global\u202fRIM Business** segment.",
-      "sources": [
-        {
-          "page": 51,
-          "score": 0.9871,
-          "source": "NYSE_IRM_2023.pdf",
-          "text": ". GLOBAL RIM BUSINESS (IN THOUSANDS) YEAR ENDED DECEMBER 31, PERCENTAGE CHANGE 2023 2022 DOLLAR CHANGE ACTUAL CONSTANT CURRENCY IMPACT OF ACQUISITIONS ORGANIC GROWTH Storage Rental $ 2,834,352 $ 2,606,721 $ 227,631 8.7 % 9.0 % 0.4 % 8.6 % Service 1,827,424 1,688,394 139,030 8.2 % 8.6 % (0.5) % 9.1 % Segment Revenue $ 4,661,776 $ 4,295,115 $ 366,661 8.5 % 8.8 % \u2014 % 8.8 % Segment Adjusted EBITDA $ 2,027,037 $ 1,887,589 $ 139,448 Segment Adjusted EBITDA Margin 43.5 % 43.9 % SEGMENT ANALYSIS: GLOBAL RIM BUSINESS (IN MILLIONS) Storage Rental Revenue Service Revenue Segment Revenue Segment Adjusted EBITDA $2,606.7 $1,688.4 $4,295.1 $2,834.4 $1,827.4 $4,661.8 2022 2023 $0 $500 $1,000 $1,500 $2,000 $2,500 $3,000 $3,500 $4,000 $4,500 $5,000 $1,887.6 $2,027.0 43.9% 43.5% Segment Adjusted EBITDA"
-        },
-        {
-          "page": 51,
-          "score": 0.9764,
-          "source": "NYSE_IRM_2023.pdf",
-          "text": "$4,661.8 2022 2023 $0 $500 $1,000 $1,500 $2,000 $2,500 $3,000 $3,500 $4,000 $4,500 $5,000 $1,887.6 $2,027.0 43.9% 43.5% Segment Adjusted EBITDA Margin 0% 20% 40% 60% Primary factors influencing the change in revenue and Adjusted EBITDA Margin in our Global RIM Business segment for the year ended December 31, 2023 compared to the year ended December 31, 2022 include the following: \u2022 organic storage rental revenue growth driven by revenue management; \u2022 organic service revenue growth primarily driven by increases in our traditional service activity levels and growth in our Global Digital Solutions business; \u2022 a decrease in revenue of $11.9 million due to foreign currency exchange rate fluctuations; and \u2022 a 40 basis point decrease in Adjusted EBITDA Margin primarily driven by an increase in"
-        },
-        {
-          "page": 128,
-          "score": 0.9088,
-          "source": "NYSE_IRM_2023.pdf",
-          "text": "Information as to our operations in different geographical areas for the years ended December 31, 2023, 2022 and 2021 is as follows: YEAR ENDED DECEMBER 31, 2023 2022 2021 Revenues: United States $ 3,507,134 $ 3,262,755 $ 2,713,147 United Kingdom 393,917 332,556 294,675 Canada 279,325 270,836 252,385 Australia 143,815 144,840 148,431 Remaining Countries 1,156,098 1,092,587 1,082,893 Long-lived Assets: United States $ 9,492,911 $ 8,925,643 $ 7,867,841 United Kingdom 1,315,715 1,062,641 914,732 Canada 498,511 514,777 562,911 Australia 484,005 490,172 528,703 Remaining Countries 3,947,115 3,600,136 3,134,577 Information as to our revenues by product and service lines by segment for the years ended December 31, 2023, 2022 and 2021 is as follows: GLOBAL RIM BUSINESS GLOBAL DATA CENTER BUSINESS"
-        }
-      ],
+      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "sources": [],
       "metadata": {
         "doc": "iron_mountain_2023",
         "type": "multi-hop",
         "difficulty": "hard"
       },
       "metrics": {
-        "correctness": 0.8947368421052632,
-        "groundedness": 0.53125,
-        "citation_quality": 1.0,
-        "completeness": 1.0,
-        "retrieval_recall": 1.0,
-        "latency_sec": 25.344940662384033,
-        "weighted_rag_score": 0.8407072368421054
+        "correctness": 0.0,
+        "groundedness": 0.0,
+        "citation_quality": 0.0,
+        "completeness": 0.0,
+        "retrieval_recall": 0.0,
+        "latency_sec": 14.0798819065094,
+        "weighted_rag_score": 0.0
       }
     },
     {
       "id": "crossdoc_02",
       "question": "How did the status of NASA's Section 106 program alternative for Historic, Toxic, and/or Special-use Facilities (HTSF) change between the 2020 report and the FY21-23 report?",
       "reference_answer": "In the 2020 report, NASA was only considering formalizing a Section 106 Program Alternative with ACHP. By the FY21-23 report, NASA had actively drafted and negotiated an Agency-wide Programmatic Agreement (APA) with ACHP, NCSHPO, Tribes, and Consulting Parties, including draft deliveries in April and November 2022 and working sessions/retreats through mid-2023.",
-      "answer": "**2020 triennial report (FY\u202f19\u201120)**  \n- NASA was *still in the planning/consideration stage* for a Section\u202f106 Program Alternative that would apply agency\u2011wide to Historic, Toxic, and/or Special\u2011use Facilities (HTSF).  The report notes that NASA \u201cis currently considering ways to formalize this understanding through use of a Section\u202f106 Program Alternative\u2026 that implements a streamlined process for modification of HTSF agency\u2011wide\u201d (p.\u202f11) and that \u201cNASA intends for the study to support a Section\u202f106 Program Alternative that will streamline the compliance requirements for properties less than 50\u202fyears of age\u201d (p.\u202f13)\u3010final\u20112020\u2011nasa\u2011triennial\u2011report\u20112020.9.24\u2011tagged.pdf\u2020p.11\u3011\u3010final\u20112020\u2011nasa\u2011triennial\u2011report\u20112020.9.24\u2011tagged.pdf\u2020p.13\u3011.  \n\n**FY\u202f21\u201123 triennial report**  \n- The excerpts provided do not contain a statement that the Section\u202f106 Program Alternative has moved beyond the planning phase.  The FY\u202f21\u201123 text mentions that the \u201cMan in Space\u201d study raised concerns that the Section\u202f106 process could hinder use of HTSF (p.\u202f11) and describes updates to the *identification* criteria for HTSF (p.\u202f33), but it does not say that the alternative has been finalized, approved, or put into operation.  (See p.\u202f11 and p.\u202f33 of the FY\u202f21\u201123 report.)\u3010eo13287_nasareport_2023.pdf\u2020p.11\u3011\u3010eo13287_nasareport_2023.pdf\u2020p.33\u3011  \n\n**Resulting comparison**  \n- In the 2020 report, the Section\u202f106 Program Alternative for HTSF was *under development*\u2014NASA was actively studying and planning to create a streamlined, agency\u2011wide alternative.  \n- In the FY\u202f21\u201123 excerpts, there is **no explicit evidence** that the alternative has progressed to an approved or implemented status; the documents only discuss related concerns and updated identification processes.  \n\n**Therefore, based on the supplied excerpts, the status changed from \u201cbeing considered/formulated\u201d in 2020 to an *unclear* or *still\u2011in",
+      "answer": "Based on the provided excerpts, the answer is not in the text. The excerpts only contain information from the 2020 report and do not include the FY21-23 report, so it is not possible to determine how the status changed between the two reports.",
       "sources": [
         {
           "page": 13,
-          "score": 0.993,
+          "score": 0.9937,
           "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
           "text": "Overview recognizing historic properties rather than on proving lack of significance. NASA is looking to integrate exemptions for regular maintenance and repair into an agency-wide Section 106 Program Alternative, or into new Center Programmatic Agreements (PAs). Where demolition of historic properties cannot be avoided, mitigation options could be selected from a pre-determined list codified in a Section 106 Program Alternative. An agency-wide Program Alternative would have the benefit of directing mitigation funds into fewer but more impactful mitigation efforts with broad agency and public benefits, rather than many small, isolated projects at the Center level. Knowing the extent of potential mitigation options in advance would enable Center Project Managers to plan more effectively"
         },
         {
           "page": 13,
-          "score": 0.9853,
+          "score": 0.9889,
           "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
           "text": ". NASA is instead taking a high-level agency- wide approach to identifying historic properties that meet CCG. With an understanding of the exceptional importance of its activities in areas of aeronautics, space exploration, and science, the HQ-directed effort will identify a subset of resource types that can convey that significance under CCG (i.e., the 17 percent). NASA intends for the study to support a Section 106 Program Alternative that will streamline the compliance requirements for properties less than 50 years of age, and has engaged both ACHP and the National Conference of State Historic Preservation Officers (NCSHPO) in preliminary discussions on the subject"
         },
         {
           "page": 11,
-          "score": 0.9765,
+          "score": 0.9801,
           "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
           "text": ". \u00a7 800.5(a)(2)(ii). In the case of HTSF, modification that enables continued use may more appropriately be viewed as a character-defining feature rather than an adverse effect, as it is the active use of the resource that ensures its preservation. This is an accepted interpretation in the case of adaptive reuse of historic buildings under the federal Historic Rehabilitation Tax Credit program, administered by the NPS. NASA is currently considering ways to formalize this understanding through use of a Section 106 Program Alternative, in coordination with ACHP, that implements a streamlined process for modification of HTSF agency wide"
         },
         {
-          "page": 11,
-          "score": 0.9753,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": ". But the visibility that the Man in Space study brought to federal agency management of HTSF \u2014 not often thought of by non-practitioners as historic properties \u2014 prompted concern among some that the Section 106 process would hamper the ability to use and reuse the resources"
-        },
-        {
-          "page": 10,
-          "score": 0.9697,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": ". As an agency dedicated to the fields of aeronautics research, human exploration and operations, science, and space technology, NASA routinely modifies, upgrades, reconfigures, cannibalizes, and replaces its resources; therefore, traditional approaches to preservation are often not feasible. Alteration inconsistent with the Secretary of the Interior\u2019s Standards for the Treatment of Historic Properties is identified as a potential adverse effect under Section 106, but the SOI standards were written with traditional historic buildings in mind.2 In the case of HTSF, modification that enables continued use may more appropriately be viewed as a character-defining feature rather than an adverse effect, as it is the active use of the resource that ensures its preservation"
-        },
-        {
-          "page": 10,
-          "score": 0.9423,
+          "page": 13,
+          "score": 0.9238,
           "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
-          "text": "about the implications of the Man in Space study, the ACHP publication aimed to demonstrate how historic HTSF could be managed consistent with the NHPA, in particular Section 106, if the respective parties\u2014preservation regulators and agency resource managers\u2014understood and accounted for one another\u2019s goals"
-        },
-        {
-          "page": 33,
-          "score": 0.9385,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": ". Changes in Identification Processes during the Reporting Period HTSF Study Building on the 1991 ACHP publication Balancing Historic Preservation Needs with the Operations of Highly Technical or Scientific Facilities, in 2021 NASA developed a definition and set of criteria for identifying facilities that qualify as HTSF, specifically: \u2022 The facility was built, installed, or established for unique technological engineering or scientific research purposes, including housing unique technological equipment or instruments; and \u2022 The facility is directly associated with scientific experimentation, discovery, or mission, or \u2022 Is integral to research and development, unique equipment manufacturing or assembly, training, observation and communications, mission control, or exploration in support of"
-        },
-        {
-          "page": 45,
-          "score": 0.9177,
-          "source": "eo13287_nasareport_2023.pdf",
-          "text": "Protecting and Utilizing Historic Properties EO 13287 Section 3 Triennial Report (FY21\u201323) 37 SECTION FIVE PARTNERSHIPS AND OUTREACH: SUPPORTING THE STEWARDSHIP OF CULTURAL RESOURCES FY21\u201323 NASA actively seeks creative ways to manage its historic properties and has welcomed opportunities to partner with other public and private entities during the reporting period. Such partnerships have allowed NASA to achieve more than it would be able to do on its own due to both staff and budget limitations, and as such they enable NASA to be a better steward of its historic properties. Several examples from the reporting period are presented below"
+          "text": ". Once completed, the Program Alternative and significance study will be used by the Center CRMs to identify the assets that may be NRHP-eligible, thereby saving the time and EO 13287 Section 3 Triennial Report (2018\u20132020) 6"
         }
       ],
       "metadata": {
@@ -992,41 +983,34 @@
         "difficulty": "hard"
       },
       "metrics": {
-        "correctness": 0.45652173913043476,
-        "groundedness": 0.5611510791366906,
+        "correctness": 0.17391304347826086,
+        "groundedness": 0.3125,
         "citation_quality": 1.0,
-        "completeness": 1.0,
+        "completeness": 0.5,
         "retrieval_recall": 1.0,
-        "latency_sec": 29.39534902572632,
-        "weighted_rag_score": 0.6728964654363465
+        "latency_sec": 28.64802598953247,
+        "weighted_rag_score": 0.3976902173913043
       }
     },
     {
       "id": "crossdoc_03",
       "question": "The acronym 'APA' (Agency-wide Programmatic Agreement) for NASA's HTSF Section 106 process appears prominently in the FY21-23 report. Is this acronym used anywhere in the 2020 report?",
       "reference_answer": "No, APA does not appear in the 2020 report; the concept was only referred to there as a prospective 'Section 106 Program Alternative,' not yet named or abbreviated as APA.",
-      "answer": "No. In the 2020 triennial report the term appears only as \u201cagency\u2011wide\u202fPA\u201d (for National Historic Landmarks) and \u201cCenter\u2011wide\u202fPAs,\u201d but the acronym **APA** (Agency\u2011wide Programmatic Agreement) does not appear in the excerpts.\u202fFor example, page\u202f21 discusses \u201cNASA\u2019s agency\u2011wide PA for NHLs\u201d and Center\u2011wide PAs, without using the abbreviation \u201cAPA.\u201d\u3010Page\u202f21, final\u20112020\u2011nasa\u2011triennial\u2011report\u20112020.9.24\u2011tagged.pdf\u3011",
-      "sources": [
-        {
-          "page": 21,
-          "score": 0.9715,
-          "source": "final-2020-nasa-triennial-report-2020.9.24-tagged.pdf",
-          "text": ". All NASA Centers have an ICRMP in place, an improvement since the last reporting period. 2.5 CENTER PROGRAMMATIC AGREEMENTS Proactive, inclusive resource surveys at the Centers have laid the groundwork for more effective, informed, and efficient management of the Section 106 process through Center PAs. In addition to NASA\u2019s agency-wide PA for NHLs, six Centers have general Center-wide PAs in place, and they are in development at another four Centers (Table 2-2). Centers are encouraged to include provisions in their PAs for actions that can be taken to avoid adverse effects to historic properties, such as archaeological monitoring and adherence to the SOI\u2019s guidelines when modifying historic buildings. EO 13287 Section 3 Triennial Report (2018\u20132020) 14"
-        }
-      ],
+      "answer": "I couldn't find relevant information in your documents to answer this question.",
+      "sources": [],
       "metadata": {
         "doc": "cross_document",
         "type": "comparison",
         "difficulty": "medium"
       },
       "metrics": {
-        "correctness": 0.4230769230769231,
-        "groundedness": 0.5227272727272727,
-        "citation_quality": 1.0,
-        "completeness": 0.6666666666666666,
-        "retrieval_recall": 1.0,
-        "latency_sec": 21.20604395866394,
-        "weighted_rag_score": 0.5832459207459207
+        "correctness": 0.07692307692307693,
+        "groundedness": 0.0,
+        "citation_quality": 0.0,
+        "completeness": 0.0,
+        "retrieval_recall": 0.0,
+        "latency_sec": 117.95600914955139,
+        "weighted_rag_score": 0.03076923076923077
       }
     }
   ]

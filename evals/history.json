@@ -103,5 +103,91 @@
     "retrieval_recall": 0.4095238095238095,
     "latency_sec": 24.268755994524273,
     "weighted_rag_score": 0.44904718603211835
+  },
+  {
+    "num_cases": 35,
+    "failures": 35,
+    "failure_types": {
+      "http_403": 35
+    },
+    "correctness": 0.0,
+    "groundedness": 0.0,
+    "citation_quality": 0.0,
+    "completeness": 0.0,
+    "retrieval_recall": 0.0,
+    "latency_sec": 0.0,
+    "weighted_rag_score": 0.0
+  },
+  {
+    "num_cases": 35,
+    "failures": 0,
+    "failure_types": {},
+    "correctness": 0.4768125616610021,
+    "groundedness": 0.41535384600637015,
+    "citation_quality": 0.6857142857142857,
+    "completeness": 0.34285714285714286,
+    "retrieval_recall": 0.42857142857142855,
+    "latency_sec": 24.361387021200997,
+    "weighted_rag_score": 0.4659920575945648
+  },
+  {
+    "num_cases": 35,
+    "failures": 0,
+    "failure_types": {},
+    "correctness": 0.6850706811255108,
+    "groundedness": 0.5647102271310227,
+    "citation_quality": 0.8857142857142857,
+    "completeness": 0.5190476190476191,
+    "retrieval_recall": 0.6428571428571429,
+    "latency_sec": 24.813474941253663,
+    "weighted_rag_score": 0.6518724958996267
+  },
+  {
+    "num_cases": 35,
+    "failures": 0,
+    "failure_types": {},
+    "correctness": 0.46192358882205686,
+    "groundedness": 0.421154324424012,
+    "citation_quality": 0.6571428571428571,
+    "completeness": 0.319047619047619,
+    "retrieval_recall": 0.43333333333333335,
+    "latency_sec": 30.872349119186403,
+    "weighted_rag_score": 0.4524389690157781
+  },
+  {
+    "num_cases": 35,
+    "failures": 0,
+    "failure_types": {},
+    "correctness": 0.6339544249651227,
+    "groundedness": 0.5102905755065704,
+    "citation_quality": 0.8,
+    "completeness": 0.4666666666666667,
+    "retrieval_recall": 0.5095238095238095,
+    "latency_sec": 31.795581333977836,
+    "weighted_rag_score": 0.594487747196025
+  },
+  {
+    "num_cases": 35,
+    "failures": 0,
+    "failure_types": {},
+    "correctness": 0.5574975984333336,
+    "groundedness": 0.45230040598931376,
+    "citation_quality": 0.6857142857142857,
+    "completeness": 0.42857142857142855,
+    "retrieval_recall": 0.5095238095238095,
+    "latency_sec": 37.419655615942816,
+    "weighted_rag_score": 0.5246455694420905
+  },
+  {
+    "num_cases": 35,
+    "failures": 0,
+    "failure_types": {},
+    "correctness": 0.456614515229005,
+    "groundedness": 0.38806768295529637,
+    "citation_quality": 0.5714285714285714,
+    "completeness": 0.30476190476190473,
+    "retrieval_recall": 0.3904761904761905,
+    "latency_sec": 38.50234114783151,
+    "weighted_rag_score": 0.42632939349709276
   }
 ]
