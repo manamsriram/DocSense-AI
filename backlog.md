@@ -7,19 +7,30 @@ baseline: commit `d32b07b` (grade_chunks truncation 300->1200), weighted_rag_sco
 
 ## Open items
 
-### 1. q2_total_assets_2023 still fails (retrieval_recall 0.0)
+### 1. q2_total_assets_2023 still fails (retrieval_recall 0.0) — FIXED
 Reranker scores a table-of-contents / overview mention of "Table 2-1" above the
 table's actual data+totals chunk (observed at rerank rank 14/40). A blanket
 top_n raise (8->15) for the whole "complex" query bucket was tried and reverted
 — fixed this one case but regressed overall score (0.594/0.652 -> 0.525/0.426
 across two runs, latency also rose ~25-31s -> ~38s) by adding noise to every
 complex query's synthesis context.
-Needs a narrower fix, e.g.:
-- Boost table-marked chunks specifically in reranked ordering (not a blanket
-  top_n change for all complex queries).
-- Or detect "how many / total" style questions and bias retrieval toward
-  chunks containing summary/totals rows.
 Reverted commits: 343fcd5 (raise), e4b5f91 (revert).
+
+Fixed narrowly instead: added `_AGGREGATION_HINT_RE` ("how many"/"total"/"sum"/
+"overall"/"count") in `app.py`. When a query matches and the reranked top_n
+slice has no table-marked chunk (`[Table]` first line, see `_is_table_chunk`),
+`_promote_table_chunk_for_aggregation()` swaps in the best-scoring table chunk
+found lower in the same ranked pool — no top_n change, no effect on
+non-aggregation queries. Wired into both `find_relevant_chunks` and
+`find_relevant_chunks_with_graph`.
+Verified: q2 retrieval_recall 0.0 -> 0.5, correctness 1.0, answer 5,409
+correct. 35-case eval (local, real Qdrant/model services, run under partial
+Groq/Gemini quota exhaustion so noisier than usual): weighted_rag_score 0.569,
+0 failures — within/above the recent 0.426-0.594 noisy range, no metric
+regressed. 89/89 unit tests pass.
+Still needed: re-run once API quota resets for a clean number, then
+reindex/redeploy to Render and re-verify live latency (this run was local-only
+and not comparable to prod latency).
 
 ### 2. Embedding / reranker model swap
 Original question that opened this line of work. Deferred — current small

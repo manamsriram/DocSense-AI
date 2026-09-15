@@ -887,6 +887,37 @@ def check_qdrant_shard_threshold():
 
 
 _COMPLEXITY_HINT_RE = re.compile(r'\b(and|versus|vs\.?|compare|between|difference)\b', re.IGNORECASE)
+_AGGREGATION_HINT_RE = re.compile(r'\b(how many|total|sum|overall|count)\b', re.IGNORECASE)
+
+
+def _is_table_chunk(text):
+    """Table chunks are tagged '[Table]' on their first line at index time
+    (see index_pdf); check only the first line so table data mentioning the
+    literal string elsewhere can't false-positive."""
+    return '[Table]' in text.split('\n', 1)[0]
+
+
+def _promote_table_chunk_for_aggregation(query, ranked, texts, top_n):
+    """For "how many/total"-style questions, the reranker sometimes scores a
+    narrative mention of a table above the table's own totals row (observed
+    at rank 14/40 for q2_total_assets_2023 — see backlog.md #1). A blanket
+    top_n raise fixed that case but added noise to every complex query, so
+    instead: only when the top_n slice has no table chunk at all, swap in the
+    best-scoring table chunk found lower in the same ranked pool.
+    """
+    top = ranked[:top_n]
+    if not _AGGREGATION_HINT_RE.search(query):
+        return top
+    if any(_is_table_chunk(texts[idx]) for idx, _ in top):
+        return top
+    for idx, score in ranked[top_n:]:
+        if _is_table_chunk(texts[idx]):
+            logging.info(
+                f"[eval] aggregation query promoted table chunk into top_n "
+                f"query={query[:60]!r}"
+            )
+            return top[:-1] + [(idx, score)]
+    return top
 
 
 def estimate_query_complexity(question, sub_query_count=1):
@@ -967,7 +998,8 @@ def find_relevant_chunks(query, user_id, top_n=3, top_k=20):
     texts = [text for _, text in candidates]
     scores = list(get_reranker_model().rerank(query, texts))
     ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-    return [(_sigmoid(float(score)), texts[idx]) for idx, score in ranked[:top_n]]
+    top = _promote_table_chunk_for_aggregation(query, ranked, texts, top_n)
+    return [(_sigmoid(float(score)), texts[idx]) for idx, score in top]
 
 
 # ---- Graph RAG ----
@@ -1437,7 +1469,8 @@ def find_relevant_chunks_with_graph(query, user_id, top_n=5, top_k=20):
 
     scores = list(get_reranker_model().rerank(query, texts))
     ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-    result = [(_sigmoid(float(score)), texts[idx]) for idx, score in ranked[:top_n]]
+    top = _promote_table_chunk_for_aggregation(query, ranked, texts, top_n)
+    result = [(_sigmoid(float(score)), texts[idx]) for idx, score in top]
 
     graph_in_top = sum(1 for _, text in result if text in graph_texts)
     logging.info(
