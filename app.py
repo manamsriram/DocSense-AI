@@ -114,6 +114,11 @@ MODEL_SERVICE_SECRET = os.getenv('MODEL_SERVICE_SECRET', '')
 # (not passages) — see model card at BAAI/bge-small-en-v1.5.
 BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: '
 
+# Folded into the semantic-cache model_version key below so an embed model
+# swap invalidates old cache entries — their vectors live in the previous
+# model's incomparable embedding space.
+EMBED_MODEL_VERSION = 'bge-small-en-v1.5'
+
 
 def _post_with_retry(url, payload, attempts=3):
     """POST to a model_service endpoint, retrying transient 429/502/503s.
@@ -2359,7 +2364,7 @@ def ask():
         if response is None and cache_key:
             query_vec = list(get_embedding_model().embed([question]))[0].tolist()
             kb_version = get_kb_version(user_id)
-            response, sources = semantic_cache_lookup(user_id, query_vec, GEMINI_MODEL, kb_version)
+            response, sources = semantic_cache_lookup(user_id, query_vec, f'{GEMINI_MODEL}|{EMBED_MODEL_VERSION}', kb_version)
             from_cache = response is not None
 
         if response is None:
@@ -2371,7 +2376,7 @@ def ask():
                 if query_vec is None:
                     query_vec = list(get_embedding_model().embed([question]))[0].tolist()
                     kb_version = get_kb_version(user_id)
-                semantic_cache_store(user_id, question, query_vec, response, sources, GEMINI_MODEL, kb_version)
+                semantic_cache_store(user_id, question, query_vec, response, sources, f'{GEMINI_MODEL}|{EMBED_MODEL_VERSION}', kb_version)
             # Always save to history when a session is active so subsequent
             # turns can fetch this turn as context.
             if session_id or not from_cache:
