@@ -65,6 +65,17 @@ the same caption-exclusion treatment. Not fully re-verified across all 3
 eval docs post-combined-fix (only spot-checked). Lower severity than table
 fix since figures come up less often in the benchmark.
 
+### 6. Self-hosted vector store per org (future, not started)
+Qdrant Cloud is itself a third party that receives raw chunk text on every
+upsert (payload `text` field), independent of any LLM-provider exposure.
+Fully removing that would mean self-hosting the vector store (e.g. per-org
+Qdrant instance or another self-hosted engine) instead of Qdrant Cloud —
+a separate infra project (provisioning, scaling, backups per tenant), not
+something to bundle into the pseudonymization work (item below). Raised
+2026-09-22 while scoping pseudonymization: BM25 and dense embeddings need
+raw text to retrieve well, so pseudonymizing what's stored in Qdrant isn't
+a substitute for this — genuinely needs its own infra change.
+
 ## Notes on process
 - Always re-run `python evals/run_eval.py` against the live endpoint after
   any change — local eval doesn't reflect prod's ingestion path or real
