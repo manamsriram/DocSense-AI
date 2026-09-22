@@ -1,6 +1,6 @@
 {
   "version": 2,
   "rewrites": [
-    { "source": "/(.*)", "destination": "https://ai-pdf-reader-ezm2.onrender.com/$1" }
+    { "source": "/(.*)", "destination": "https://docsense-ai-7k4b.onrender.com/$1" }
   ]
 }

@@ -189,5 +189,19 @@
     "retrieval_recall": 0.3904761904761905,
     "latency_sec": 38.50234114783151,
     "weighted_rag_score": 0.42632939349709276
+  },
+  {
+    "num_cases": 35,
+    "failures": 3,
+    "failure_types": {
+      "other": 3
+    },
+    "correctness": 0.6352129569263859,
+    "groundedness": 0.5291658484770728,
+    "citation_quality": 0.8285714285714286,
+    "completeness": 0.4666666666666667,
+    "retrieval_recall": 0.5857142857142857,
+    "latency_sec": 29.650648832321167,
+    "weighted_rag_score": 0.6039956925088702
   }
 ]

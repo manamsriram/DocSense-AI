@@ -15,7 +15,7 @@ A document intelligence platform for querying PDF content using natural language
 ![Render](https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)
 
-[Live Demo](https://ai-pdf-reader-ezm2.onrender.com) · [Report Bug](https://github.com/manamsriram/DocsenseAI/issues) · [Request Feature](https://github.com/manamsriram/DocsenseAI/issues)
+[Live Demo](https://docsense-ai-7k4b.onrender.com) · [Report Bug](https://github.com/manamsriram/DocsenseAI/issues) · [Request Feature](https://github.com/manamsriram/DocsenseAI/issues)
 
 </div>
 

@@ -7,7 +7,7 @@ baseline: commit `d32b07b` (grade_chunks truncation 300->1200), weighted_rag_sco
 
 ## Open items
 
-### 1. q2_total_assets_2023 still fails (retrieval_recall 0.0) — FIXED
+### 1. q2_total_assets_2023 still fails (retrieval_recall 0.0) — FIXED, VERIFIED LIVE
 Reranker scores a table-of-contents / overview mention of "Table 2-1" above the
 table's actual data+totals chunk (observed at rerank rank 14/40). A blanket
 top_n raise (8->15) for the whole "complex" query bucket was tried and reverted
@@ -28,9 +28,15 @@ correct. 35-case eval (local, real Qdrant/model services, run under partial
 Groq/Gemini quota exhaustion so noisier than usual): weighted_rag_score 0.569,
 0 failures — within/above the recent 0.426-0.594 noisy range, no metric
 regressed. 89/89 unit tests pass.
-Still needed: re-run once API quota resets for a clean number, then
-reindex/redeploy to Render and re-verify live latency (this run was local-only
-and not comparable to prod latency).
+
+Re-verified live against prod (2026-09-22, new Render URL
+docsense-ai-7k4b.onrender.com after the old ai-pdf-reader-ezm2 instance was
+suspended — README/vercel.json updated): weighted_rag_score 0.604,
+correctness 0.635, retrieval_recall 0.586, citation_quality 0.829, latency
+29.7s avg, 3/35 failures (q7/q8/q9, all generic "API error, please try
+again" — transient, not code-related). q2_total_assets_2023 held:
+correctness 1.0, weighted_rag_score 0.81. No metric regressed vs. the
+0.426-0.652 noisy baseline range. Item closed.
 
 ### 2. Embedding / reranker model swap
 Original question that opened this line of work. Deferred — current small
