@@ -3,6 +3,42 @@
 **Date:** 2026-09-22
 **Status:** Approved for implementation
 
+**Revision (same day, during plan-writing):** tracing the actual retrieval
+call sites surfaced two problems with the design as first written. Both are
+corrected below rather than left as implementation surprises.
+
+1. **Two more call sites send raw text to third-party LLMs**, missed in the
+   original scope: `decompose_query` (`app.py:1601`, question → Groq, called
+   at `app.py:1805`) and `extract_and_store_graph` (`app.py:1018`, chunk
+   text → OpenRouter for graph-triple extraction, called at ingestion time
+   from `app.py:841-846`). Both are now in scope — see their sections below.
+2. **The "dual `text`/`pseudo_text` Qdrant field" plan doesn't fit how the
+   pipeline actually moves data.** Retrieval (`hybrid_search`,
+   `find_relevant_chunks(_with_graph)`, `_promote_table_chunk_for_aggregation`,
+   the reranker) passes plain `(score, text)` tuples end-to-end, and
+   `_promote_table_chunk_for_aggregation` indexes into a flat `texts` list
+   by position. Threading a second parallel list through all of that to
+   keep two values index-aligned is a large, regression-risky diff to an
+   already carefully-tuned pipeline (see backlog.md item 1's whole saga
+   over a single top_n change) — and it's unnecessary. Corrected approach:
+   **don't store `pseudo_text` at all.** Ingestion-time Presidio still runs
+   once per chunk, but only to populate the `pseudonym_mappings` table
+   (real_value → pseudonym, org-scoped). At the LLM-call boundary, a cheap
+   substitution helper (`pseudonymize_text(text, org_id)`) does a plain
+   multi-string replace using the org's already-known mapping — no NER at
+   request time for chunk text, so the "no query-latency cost" goal still
+   holds, and the **entire retrieval pipeline is untouched**: `hybrid_search`,
+   `find_relevant_chunks(_with_graph)`, `_promote_table_chunk_for_aggregation`,
+   and the reranker keep operating on raw text exactly as today. Only the
+   handful of places that build a prompt for or consume output from Groq/
+   OpenRouter/Gemini change. The one remaining per-request NER cost is the
+   user's own question (to catch entities that appear in a question but
+   never in any indexed document) — same as originally scoped, still a
+   single short string.
+
+This changes "Ingestion-time pseudonymization" and "Query-time (per-request)
+pseudonymization" below; read them as corrected, not the original framing.
+
 ---
 
 ## Context
@@ -21,8 +57,9 @@ retrieval quality (see "Rejected: pseudonymizing Qdrant-stored text" below)
 and is deferred to backlog item 6 (self-hosted vector store per org).
 
 **Goals:**
-- No raw sensitive text reaches Groq/OpenRouter/Gemini in grading,
-  reformulation, or synthesis calls.
+- No raw sensitive text reaches Groq/OpenRouter/Gemini in query
+  decomposition, grading, reformulation, synthesis, or graph-extraction
+  calls.
 - No raw sensitive pixels reach Groq's vision model for scanned
   pages/figures.
 - Reversible: the user still sees real values in the final answer and in
@@ -88,23 +125,40 @@ subsystem this app doesn't otherwise have.
 
 ---
 
-## Ingestion-time pseudonymization
+## Ingestion-time: populate the mapping only
 
 In `index_pdf`'s `flush()` (`app.py:739-765`), before the existing
-`qdrant.upsert`:
+`qdrant.upsert`, run Presidio's `AnalyzerEngine` (recognizers built from the
+org's `pseudonymize_entities` list) over each `display_text` and, for every
+detected entity, look up or create its pseudonym in `pseudonym_mappings`
+(org-scoped, `(org_id, real_value)` unique). Nothing else changes:
+`qdrant.upsert`'s payload keeps only `text` (raw), exactly as today.
+Embeddings, BM25 tokenization (`app.py:291-412`), citations, and
+`_promote_table_chunk_for_aggregation`'s table-marker matching are
+untouched — they never see a pseudonymized value.
 
-1. Run Presidio's `AnalyzerEngine` (recognizers built from the org's
-   `pseudonymize_entities` list) over each `display_text`.
-2. For each detected entity, look up or create its pseudonym in
-   `pseudonym_mappings` (org-scoped).
-3. Substitute to produce `pseudo_text`.
-4. Store **both** fields in the Qdrant payload:
-   `payload={'source': ..., 'text': display_text, 'pseudo_text': pseudo_text, ...}`.
+By the time a document finishes indexing, every sensitive value it contains
+has a stable pseudonym in the mapping table, ready for the substitution
+helper below to use without any further NER.
 
-`text` is unchanged in every existing consumer — embeddings (`embed_texts`),
-BM25 tokenization (`app.py:291-412`), citations, and
-`_promote_table_chunk_for_aggregation`'s table-marker matching all keep
-using raw text exactly as today. `pseudo_text` is new and additive.
+## The substitution helper
+
+Two functions, used everywhere raw text crosses into or out of a
+third-party LLM call:
+
+- `pseudonymize_text(text, org_id) -> str` — fetches the org's full
+  mapping (real_value → pseudonym; batch-fetched and cached per request,
+  not one Supabase round-trip per entity), sorts known real values longest
+  first (so e.g. "John Smith" matches before a lone "John"), and does a
+  plain string replace. No NER.
+- `deanonymize_text(text, org_id) -> str` — same mapping, reverse
+  direction (pseudonym → real_value), plain string replace.
+
+Chunk text pseudonymization is therefore **free of NER at request time** —
+it's a string-replace pass over text already fetched from Qdrant, using a
+mapping already computed at ingestion. This is what keeps the "zero added
+latency on `/ask`" goal true without needing to store a second copy of
+every chunk.
 
 ### Vision fallback (image redaction)
 
@@ -124,51 +178,64 @@ the app process.
 
 ---
 
-## Query-time (per-request) pseudonymization
+## Query-time: wrapping the actual call sites
 
-The user's question is a single short string — Presidio's cost here is
-negligible even with spaCy, so this runs inline in the `/ask` request
-path without the latency concern above.
+The full pipeline, traced through `ask_file_agentic` (`app.py:1798-1880`)
+and `ask_file` (`app.py:1773-1795`), passes raw text as `(score, text)`
+tuples from `hybrid_search` through reranking and
+`_promote_table_chunk_for_aggregation` to `build_source`. None of that
+changes. Pseudonymization wraps six call sites, each using
+`pseudonymize_text`/`deanonymize_text` from the previous section:
 
-At the top of the `/ask` flow (`app.py` around `ask()`/`ask_file_agentic`):
+**`decompose_query(question)` (`app.py:1601`, called `app.py:1805`).**
+Sends the raw question to Groq. Wrap: pseudonymize `question` before the
+call; the returned `sub_queries` list drives further Qdrant retrieval
+(`app.py:1827`), so deanonymize each sub-query string before it's used as
+`retrieval_query`.
 
-1. `raw_question` = the user's text, as today. Used for Qdrant vector
-   search (`hybrid_search`, `app.py:950`) — retrieval must stay in the
-   real semantic space, so this embedding call is unchanged.
-2. `pseudo_question` = `raw_question` run through the same org-scoped
-   Presidio + mapping substitution used at ingestion. Used for every LLM
-   call: `grade_chunks`, `reformulate_query`, `generate_text` (synthesis).
+**`grade_chunks(sub_q, texts)` (called `app.py:1834`).** Both arguments go
+to Groq. Wrap: pseudonymize `sub_q` and each string in `texts` before the
+call. Returns relevance **indices** only (`app.py:1642-1644`), which index
+into the caller's original raw-text list — no reversal needed on the
+output.
 
-### `grade_chunks`
+**`reformulate_query(retrieval_query)` (`app.py:1663-1669`, called
+`app.py:1844`).** An LLM call (needs pseudonymized input) whose *output*
+gets used for another Qdrant search (needs raw semantics). Wrap:
+pseudonymize the input, then **deanonymize the output** before it
+replaces `retrieval_query`. Same mapping, both directions, no new storage.
 
-Consumes `pseudo_question` + the chunks' `pseudo_text` instead of raw.
-Returns relevance **indices** only (`app.py:1642-1644`), which still index
-into the caller's raw-text list — no reversal needed on this call's output.
+**`build_source(score, text)` (`app.py:1750-1770`), for the synthesis
+prompt only.** Today `clean` (marker-stripped text) is used for *both* the
+citation `source` dict and the `prompt_text` returned for the synthesis
+prompt — they're currently the same string. Split them: `source` keeps
+`clean` (raw — the user is meant to see real values in citations,
+unchanged); `prompt_text` becomes `pseudonymize_text(clean, org_id)`. This
+needs `org_id` threaded into `build_source`'s signature (available in both
+callers — `ask_file`/`ask_file_agentic` already resolve it or can resolve
+it once via `get_or_create_org_for_user(user_id)`).
 
-### `reformulate_query` — the one call with a reversal step
+**`generate_text(prompt, ...)` (called `app.py:1792`, `app.py:1871`).**
+The prompt (built from already-pseudonymized `prompt_text` via
+`build_source`, plus the pseudonymized question) goes to
+Groq/OpenRouter/Gemini as today — no change to `generate_text` itself.
+Its *return value* may echo pseudonyms verbatim (e.g. "filed by
+PERSON_a3f1"). Deanonymize the response before it's returned to the
+caller or cached (`cache_response`, `semantic_cache_store`).
 
-`reformulate_query` (`app.py:1663-1669`) is an LLM call (needs
-pseudonymized input, same as grading/synthesis) but its *output* gets
-re-embedded for a second Qdrant search (needs raw semantics — a
-pseudonymized rewritten query would search the wrong vector space).
-Resolution: pseudonymize the input as normal, then **reverse-substitute
-the LLM's output** back to raw terms (using the same org mapping, pseudonym
-→ real_value direction) before using it for retrieval. Same mapping table,
-used in both directions — no new storage.
-
-### `generate_text` (synthesis) and response de-anonymization
-
-Builds its prompt from `pseudo_question` + the graded chunks' `pseudo_text`.
-The returned answer may echo pseudonyms the LLM saw verbatim (e.g. "the
-report was filed by PERSON_a3f1"). Before returning the answer to the user
-or caching it (`cache_response`, `semantic_cache_store`), reverse-substitute
-every pseudonym back to its real value — batch-fetch the org's mapping
-rows once per request (not one Supabase round-trip per entity found).
+**`extract_and_store_graph(batch_chunks, user_id, source_doc)`
+(`app.py:1018`, ingestion-time, called `app.py:841-846`).** Sends raw
+chunk text to OpenRouter for entity/triple extraction. Wrap: pseudonymize
+each chunk's text before formatting into `_GRAPH_EXTRACT_PROMPT`. Runs at
+ingestion (GH Actions runner), so no request-latency concern — but this
+is a second entity-substitution pass over the same text already
+pseudonymized once for the mapping population above; both reads use the
+already-built mapping, so it's still just string-replace, not NER.
 
 Citations/sources already read the raw `text` field
-(`app.py:2322`: `{'type': ..., 'text': p.payload.get('text', '')}`) — no
-change needed there; the user was always meant to see real values in
-citations.
+(`app.py:2322`: `{'type': ..., 'text': p.payload.get('text', '')}`) and
+`build_source`'s `source` dict above — no change needed there; the user
+was always meant to see real values in citations.
 
 ### Semantic cache interaction
 
@@ -213,14 +280,19 @@ redactor) available in the main app process too.
 
 ## Testing
 
-- Unit: Presidio substitution is deterministic given a fixed mapping —
-  test `pseudonymize_text(text, org_id) -> (pseudo_text, entities_found)`
-  and its reverse `deanonymize_text(text, org_id)` round-trip to the
-  original.
+- Unit: `detect_and_register_entities(text, org_id)` (ingestion-time NER +
+  mapping upsert) creates one mapping row per new entity, and reuses the
+  existing pseudonym on a second call with the same `real_value` — this is
+  what makes pseudonyms stable across documents.
+- Unit: `pseudonymize_text(text, org_id)` / `deanonymize_text(text, org_id)`
+  (pure substitution, no NER) round-trip to the original given a seeded
+  mapping, and leave text with no known entities unchanged.
 - Unit: `reformulate_query`'s reversal step — pseudonymized input in,
   raw-term output out, given a seeded mapping.
 - Unit: response de-anonymization — a synthesized answer containing
   pseudonym tokens comes back with real values substituted.
+- Unit: `build_source` — `source['text']` stays raw while the returned
+  `prompt_text` is pseudonymized, given a seeded mapping.
 - Integration: run `evals/run_eval.py` against a deploy with this change —
   per CLAUDE.md's regression gates, `retrieval_recall`, `citation_quality`,
   and `groundedness` must not regress, since `text` (raw) still drives
