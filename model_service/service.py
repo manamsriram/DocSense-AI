@@ -22,7 +22,7 @@ _reranker_model = None
 if MODEL_ROLE == 'embed':
     from fastembed import TextEmbedding
     _embedding_model = TextEmbedding(
-        model_name='sentence-transformers/all-MiniLM-L6-v2',
+        model_name='BAAI/bge-small-en-v1.5',
         cache_dir=CACHE_DIR,
         threads=1
     )

@@ -110,6 +110,10 @@ EMBED_SERVICE_URL = (os.getenv('EMBED_SERVICE_URL') or '').rstrip('/')
 RERANK_SERVICE_URL = (os.getenv('RERANK_SERVICE_URL') or '').rstrip('/')
 MODEL_SERVICE_SECRET = os.getenv('MODEL_SERVICE_SECRET', '')
 
+# bge-small-en-v1.5's required instruction prefix for retrieval queries
+# (not passages) — see model card at BAAI/bge-small-en-v1.5.
+BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: '
+
 
 def _post_with_retry(url, payload, attempts=3):
     """POST to a model_service endpoint, retrying transient 429/502/503s.
@@ -946,8 +950,10 @@ def hybrid_search(query, user_id, top_k=20):
     if count == 0:
         return []
 
-    # Dense retrieval via Qdrant, filtered to this org
-    query_vec = list(get_embedding_model().embed([query]))[0].tolist()
+    # Dense retrieval via Qdrant, filtered to this org. bge-small-en-v1.5 needs
+    # this instruction prefix on queries (not passages) for asymmetric
+    # retrieval per the model card; skipping it measurably hurts recall.
+    query_vec = list(get_embedding_model().embed([BGE_QUERY_PREFIX + query]))[0].tolist()
     hits = qdrant.query_points(
         collection_name=COLLECTION,
         query=query_vec,
