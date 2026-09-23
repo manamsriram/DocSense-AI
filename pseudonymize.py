@@ -90,3 +90,27 @@ def _invalidate_mapping_cache(org_id):
     pseudonym is usable in a query."""
     with _mapping_cache_lock:
         _mapping_cache.pop(org_id, None)
+
+
+_analyzer = None
+
+
+def _get_analyzer():
+    """Lazy singleton -- see module docstring on why this isn't a
+    top-level import."""
+    global _analyzer
+    if _analyzer is None:
+        from presidio_analyzer import AnalyzerEngine
+        _analyzer = AnalyzerEngine()
+    return _analyzer
+
+
+def detect_and_register_entities(text, org_id):
+    """Run NER once and register every detected entity's pseudonym.
+    Ingestion-time only (or once per unique question string) -- this is
+    the only function in this module that runs actual NER."""
+    entity_types = get_org_entity_types(org_id)
+    results = _get_analyzer().analyze(text=text, entities=entity_types, language='en')
+    for r in results:
+        real_value = text[r.start:r.end]
+        get_or_create_pseudonym(org_id, real_value, r.entity_type)

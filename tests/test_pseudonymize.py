@@ -93,3 +93,19 @@ def test_fetch_org_mapping_returns_real_value_to_pseudonym_dict():
     with patch('pseudonymize.app.supabase_admin', fake_supabase):
         mapping = pseudonymize._fetch_org_mapping('org-1')
     assert mapping == {'Jane Doe': 'PERSON_ab12', 'jane@example.com': 'EMAIL_ADDRESS_cd34'}
+
+
+def test_detect_and_register_entities_registers_each_detected_entity():
+    fake_supabase = _mock_supabase_table({
+        'orgs': [{'pseudonymize_entities': ['PERSON']}],
+        'pseudonym_mappings': [],
+    })
+    fake_analyzer_result = [MagicMock(entity_type='PERSON', start=0, end=8)]
+    with patch('pseudonymize.app.supabase_admin', fake_supabase), \
+         patch('pseudonymize._get_analyzer') as mock_get_analyzer:
+        mock_get_analyzer.return_value.analyze.return_value = fake_analyzer_result
+        pseudonymize.detect_and_register_entities('Jane Doe filed the report.', 'org-1')
+    fake_supabase.table.return_value.upsert.assert_called_once()
+    upserted = fake_supabase.table.return_value.upsert.call_args[0][0]
+    assert upserted['real_value'] == 'Jane Doe'
+    assert upserted['entity_type'] == 'PERSON'
