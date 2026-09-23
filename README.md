@@ -118,7 +118,17 @@ REDIS_URL=rediss://default:<token>@<host>.upstash.io:6379
 SEMANTIC_CACHE_THRESHOLD=0.93
 SEMANTIC_CACHE_L1_MAX=500
 SEMANTIC_CACHE_PER_USER_MAX=50
+
+# Pseudonymization (required)
+PSEUDONYM_SECRET=your_random_secret  # e.g. `openssl rand -hex 32`
 ```
+
+> **Before deploying the pseudonymization feature:** run the migration in
+> [`docs/migrations/2026-09-22-pseudonymization.sql`](docs/migrations/2026-09-22-pseudonymization.sql)
+> against your Supabase project (creates the `pseudonym_mappings` table and
+> the `orgs.pseudonymize_entities` column), and set the `PSEUDONYM_SECRET`
+> env var above — it's required at import time (`pseudonymize.py` fails
+> fast if unset) and used to derive per-org, non-reversible pseudonyms.
 
 ### Running Locally
 
