@@ -105,6 +105,12 @@ def test_detect_and_register_entities_registers_each_detected_entity():
          patch('pseudonymize._get_analyzer') as mock_get_analyzer:
         mock_get_analyzer.return_value.analyze.return_value = fake_analyzer_result
         pseudonymize.detect_and_register_entities('Jane Doe filed the report.', 'org-1')
+    # Verify the org-scoped entity list was actually passed to .analyze()
+    mock_get_analyzer.return_value.analyze.assert_called_once_with(
+        text='Jane Doe filed the report.',
+        entities=['PERSON'],
+        language='en'
+    )
     fake_supabase.table.return_value.upsert.assert_called_once()
     upserted = fake_supabase.table.return_value.upsert.call_args[0][0]
     assert upserted['real_value'] == 'Jane Doe'

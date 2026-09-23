@@ -93,15 +93,20 @@ def _invalidate_mapping_cache(org_id):
 
 
 _analyzer = None
+_analyzer_lock = threading.Lock()
 
 
 def _get_analyzer():
     """Lazy singleton -- see module docstring on why this isn't a
-    top-level import."""
+    top-level import. Uses double-checked locking to prevent concurrent
+    threads from each constructing an AnalyzerEngine (which loads a spaCy
+    model), avoiding transient memory spikes on memory-constrained dyno."""
     global _analyzer
     if _analyzer is None:
-        from presidio_analyzer import AnalyzerEngine
-        _analyzer = AnalyzerEngine()
+        with _analyzer_lock:
+            if _analyzer is None:
+                from presidio_analyzer import AnalyzerEngine
+                _analyzer = AnalyzerEngine()
     return _analyzer
 
 
