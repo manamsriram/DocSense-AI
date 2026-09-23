@@ -1326,6 +1326,32 @@ def test_extract_and_store_graph_sends_pseudonymized_text_to_openrouter():
     assert 'Jane Doe' not in captured['prompt']
 
 
+def test_extract_and_store_graph_pseudonymize_failure_does_not_propagate():
+    """Fix #4: pseudonymize_text (Supabase mapping fetch) sits inside
+    extract_and_store_graph's own batch, called AFTER index_pdf's Qdrant
+    upserts for the document have already succeeded. If it raises
+    uncaught, the exception propagates out of index_pdf, leaving the
+    document "failed but actually partially indexed". The batch must fail
+    closed: log and skip graph extraction for this batch, never fall back
+    to sending raw unpseudonymized text, and never let the exception
+    escape extract_and_store_graph."""
+    from app import extract_and_store_graph
+
+    openrouter_called = MagicMock()
+
+    with patch('app._call_openrouter_helper', openrouter_called), \
+         patch('pseudonymize.pseudonymize_text', side_effect=Exception("Supabase mapping fetch failed")), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'):
+        # Must not raise -- this is the assertion. A prior version let the
+        # pseudonymize.pseudonymize_text exception propagate straight out
+        # of this call.
+        extract_and_store_graph([('id1', 1, 'Jane Doe filed this.')], 'user-1', 'doc.pdf')
+
+    # Fail closed: the LLM must never be called with raw (or any) text once
+    # pseudonymization itself failed for this batch.
+    openrouter_called.assert_not_called()
+
+
 def test_extract_and_store_graph_deanonymizes_extracted_entity_names_before_storage():
     """LLMs often echo input tokens verbatim: if the OpenRouter response contains
     a pseudonym token (because it saw pseudonymized chunk text), the graph must

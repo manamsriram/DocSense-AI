@@ -1040,10 +1040,21 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
     members) while user_id is kept for provenance/ownership only.
     """
     org_id = get_or_create_org_for_user(user_id)
-    formatted = '\n\n'.join(
-        f'[{i}] {pseudonymize.pseudonymize_text(text, org_id)[:600]}'
-        for i, (_, _, text) in enumerate(batch_chunks)
-    )
+    try:
+        # pseudonymize_text can hit Supabase (mapping fetch) -- keep this
+        # inside the batch's own try/except (fail closed: skip graph
+        # extraction for this batch entirely on failure) rather than
+        # letting it raise uncaught, which would propagate out of
+        # index_pdf AFTER that document's Qdrant upserts already
+        # succeeded, leaving it "failed but actually partially indexed".
+        # Never fall back to sending raw, unpseudonymized text.
+        formatted = '\n\n'.join(
+            f'[{i}] {pseudonymize.pseudonymize_text(text, org_id)[:600]}'
+            for i, (_, _, text) in enumerate(batch_chunks)
+        )
+    except Exception as e:
+        logging.warning(f"[graph] pseudonymize_text failed for batch in {source_doc}, skipping graph extraction: {e}")
+        return
     try:
         raw = _call_openrouter_helper(
             _GRAPH_EXTRACT_PROMPT.format(chunks=formatted), max_tokens=700
@@ -1066,10 +1077,13 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
 
         for ent in item.get('entities', []):
             # The LLM saw pseudonymized chunk text and may echo pseudonym
-            # tokens verbatim (e.g. "PERSON_ab12") back as entity names —
-            # deanonymize before lowercasing (pseudonym tokens are matched
-            # case-sensitively) so the graph stores real values only, same
-            # as it would without pseudonymization.
+            # tokens back as entity names -- per _GRAPH_EXTRACT_PROMPT's
+            # "normalize to canonical lowercase" instruction, usually
+            # lowercased (e.g. "person_ab12" for stored "PERSON_ab12").
+            # deanonymize_text matches case-insensitively (see
+            # pseudonymize._compile_pattern) but always substitutes the
+            # canonical stored real value, so the graph stores real values
+            # only, same as it would without pseudonymization.
             name = pseudonymize.deanonymize_text(ent.get('name', ''), org_id).strip().lower()
             if not name:
                 continue
