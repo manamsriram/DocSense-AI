@@ -1185,6 +1185,26 @@ def test_extract_and_store_graph_writes_org_id_and_upserts_org_scoped():
     assert inserted_edges['rows'][0]['user_id'] == 'user-extract-1'
 
 
+def test_extract_and_store_graph_sends_pseudonymized_text_to_openrouter():
+    """Raw chunk text must never reach the OpenRouter graph-extraction call —
+    it has to be pseudonymized first, same as every other third-party LLM call."""
+    from app import extract_and_store_graph
+
+    captured = {}
+
+    def fake_openrouter_helper(user_content, max_tokens):
+        captured['prompt'] = user_content
+        return '[]'  # no entities, simplest valid response
+
+    with patch('app._call_openrouter_helper', side_effect=fake_openrouter_helper), \
+         patch('pseudonymize.pseudonymize_text', return_value='REDACTED'), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'):
+        extract_and_store_graph([('id1', 1, 'Jane Doe filed this.')], 'user-1', 'doc.pdf')
+
+    assert 'REDACTED' in captured['prompt']
+    assert 'Jane Doe' not in captured['prompt']
+
+
 # ---- Item C: alias-based entity linking ----
 
 def test_build_graph_from_supabase_loads_aliases_onto_nodes():

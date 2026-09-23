@@ -1031,7 +1031,8 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
     """
     org_id = get_or_create_org_for_user(user_id)
     formatted = '\n\n'.join(
-        f'[{i}] {text[:600]}' for i, (_, _, text) in enumerate(batch_chunks)
+        f'[{i}] {pseudonymize.pseudonymize_text(text, org_id)[:600]}'
+        for i, (_, _, text) in enumerate(batch_chunks)
     )
     try:
         raw = _call_openrouter_helper(
