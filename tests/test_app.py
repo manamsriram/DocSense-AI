@@ -872,6 +872,39 @@ def test_incremental_bm25_update_filters_qdrant_by_org_id():
     bm25_indices.pop('org-bm25-filter-2', None)
 
 
+# ---- Task 4: entity registration at ingestion ----
+
+def test_index_pdf_registers_entities_for_each_flushed_chunk(tmp_path):
+    """Every chunk flushed to Qdrant during index_pdf must also be run through
+    pseudonymize.detect_and_register_entities so query-time pseudonymization has
+    a mapping to substitute against. Qdrant payload shape is unaffected — this
+    only adds a call alongside the existing upsert."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Contact John Smith at john.smith@example.com for details.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    calls = []
+    with patch('app.get_or_create_org_for_user', return_value='org-entity-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('pseudonymize.detect_and_register_entities',
+               side_effect=lambda text, org_id: calls.append((text, org_id))):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'entity-test-user', display_name='doc.pdf')
+
+    assert result > 0
+    assert len(calls) > 0
+    assert all(org_id == 'org-entity-test' for _, org_id in calls)
+    assert any('John Smith' in text for text, _ in calls)
+
+
 # ---- Item A-Graph: incremental in-memory graph patching ----
 
 def _graph_supabase_mock(edges_data=None, nodes_data=None):

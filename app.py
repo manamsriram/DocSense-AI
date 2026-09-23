@@ -31,6 +31,7 @@ from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, Fi
 from rank_bm25 import BM25Okapi
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from supabase import create_client, Client
+import pseudonymize
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -740,6 +741,8 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
         nonlocal points, embed_texts, total_indexed
         if not points:
             return
+        for _, _, display_text, _ in points:
+            pseudonymize.detect_and_register_entities(display_text, org_id)
         vecs = list(get_embedding_model().embed(embed_texts))
         qdrant.upsert(
             collection_name=COLLECTION,
