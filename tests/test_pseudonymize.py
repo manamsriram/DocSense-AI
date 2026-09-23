@@ -21,10 +21,16 @@ def _clear_mapping_cache():
     pseudonymize._reverse_mapping_cache.clear()
 
 
-def _mock_supabase_table(rows_by_table):
+def _mock_supabase_table(rows_by_table, range_pages=None):
     """Returns a MagicMock standing in for app.supabase_admin, where
     .table(name).select/insert/upsert(...).execute() chains return
-    canned data from rows_by_table[name]."""
+    canned data from rows_by_table[name].
+
+    range_pages: optional {table_name: [page1_rows, page2_rows, ...]} --
+    when given, .select(...).eq(...).range(start, end).execute() returns
+    successive pages on successive calls (for pagination tests), instead
+    of the single rows_by_table[name] snapshot every call.
+    """
     mock = MagicMock()
     tbl_cache = {}
 
@@ -37,6 +43,20 @@ def _mock_supabase_table(rows_by_table):
             tbl.select.return_value.eq.return_value.eq.return_value.execute.return_value = result
             tbl.insert.return_value.execute.return_value = result
             tbl.upsert.return_value.execute.return_value = result
+
+            if range_pages and name in range_pages:
+                pages = list(range_pages[name])
+
+                def range_execute_side_effect(_pages=pages):
+                    page_result = MagicMock()
+                    page_result.data = _pages.pop(0) if _pages else []
+                    return page_result
+
+                range_mock = tbl.select.return_value.eq.return_value.range
+                range_mock.return_value.execute.side_effect = range_execute_side_effect
+            else:
+                tbl.select.return_value.eq.return_value.range.return_value.execute.return_value = result
+
             tbl_cache[name] = tbl
         return tbl_cache[name]
 
@@ -93,8 +113,9 @@ def test_fetch_org_mapping_returns_real_value_to_pseudonym_dict():
         ]}
     )
     with patch('pseudonymize.app.supabase_admin', fake_supabase):
-        mapping = pseudonymize._fetch_org_mapping('org-1')
+        mapping, pattern = pseudonymize._fetch_org_mapping('org-1')
     assert mapping == {'Jane Doe': 'PERSON_ab12', 'jane@example.com': 'EMAIL_ADDRESS_cd34'}
+    assert pattern is not None
 
 
 def test_detect_and_register_entities_registers_each_detected_entity():
@@ -107,16 +128,35 @@ def test_detect_and_register_entities_registers_each_detected_entity():
          patch('pseudonymize._get_analyzer') as mock_get_analyzer:
         mock_get_analyzer.return_value.analyze.return_value = fake_analyzer_result
         pseudonymize.detect_and_register_entities('Jane Doe filed the report.', 'org-1')
-    # Verify the org-scoped entity list was actually passed to .analyze()
+    # Verify the org-scoped entity list and score_threshold were passed to .analyze()
     mock_get_analyzer.return_value.analyze.assert_called_once_with(
         text='Jane Doe filed the report.',
         entities=['PERSON'],
-        language='en'
+        language='en',
+        score_threshold=pseudonymize.NER_SCORE_THRESHOLD,
     )
     fake_supabase.table.return_value.upsert.assert_called_once()
     upserted = fake_supabase.table.return_value.upsert.call_args[0][0]
     assert upserted['real_value'] == 'Jane Doe'
     assert upserted['entity_type'] == 'PERSON'
+
+
+def test_detect_and_register_entities_skips_too_short_detection():
+    """Fix #6: a detection shorter than MIN_ENTITY_LENGTH after stripping
+    whitespace must not be registered, even if Presidio scored it above
+    score_threshold -- short tokens ("US", "Hi") are disproportionately
+    false positives, and once registered they get substituted everywhere."""
+    fake_supabase = _mock_supabase_table({
+        'orgs': [{'pseudonymize_entities': ['LOCATION']}],
+        'pseudonym_mappings': [],
+    })
+    # "US" is 2 chars -- below MIN_ENTITY_LENGTH (3)
+    fake_analyzer_result = [MagicMock(entity_type='LOCATION', start=0, end=2)]
+    with patch('pseudonymize.app.supabase_admin', fake_supabase), \
+         patch('pseudonymize._get_analyzer') as mock_get_analyzer:
+        mock_get_analyzer.return_value.analyze.return_value = fake_analyzer_result
+        pseudonymize.detect_and_register_entities('US filed the report.', 'org-1')
+    fake_supabase.table.return_value.upsert.assert_not_called()
 
 
 def test_pseudonymize_text_replaces_known_real_values():
@@ -197,11 +237,44 @@ def test_make_pseudonym_digest_is_8_hex_chars():
     """4 hex chars (16 bits) collides ~50% of the time (birthday paradox) once
     an org has ~300 distinct names of one entity type -- 8 hex chars (32 bits)
     pushes that threshold out to ~77,000 names."""
-    pseudonym = pseudonymize._make_pseudonym('PERSON', 'Jane Doe')
+    pseudonym = pseudonymize._make_pseudonym('PERSON', 'Jane Doe', 'org-1')
     prefix, _, digest = pseudonym.rpartition('_')
     assert prefix == 'PERSON'
     assert len(digest) == 8
     assert all(c in '0123456789abcdef' for c in digest)
+
+
+def test_make_pseudonym_differs_across_orgs_for_same_real_value():
+    """Fix #2: pseudonyms must be org-scoped -- otherwise a provider that
+    sees the same pseudonym for 'Jane Doe' across two different orgs' LLM
+    calls can link the same person cross-tenant."""
+    pseudonym_org1 = pseudonymize._make_pseudonym('PERSON', 'Jane Doe', 'org-1')
+    pseudonym_org2 = pseudonymize._make_pseudonym('PERSON', 'Jane Doe', 'org-2')
+    assert pseudonym_org1 != pseudonym_org2
+
+
+def test_make_pseudonym_is_not_plain_unsalted_sha256():
+    """Fix #2: the old scheme (plain sha256(real_value)[:8]) is reversible
+    offline by anyone who knows the scheme (it's public, in this repo) --
+    brute-forcing structured values like SSNs is ~2^30 work. The new HMAC
+    scheme must depend on PSEUDONYM_SECRET, so the digest differs from the
+    unsalted hash and can't be reproduced without the secret."""
+    import hashlib
+    real_value = 'Jane Doe'
+    pseudonym = pseudonymize._make_pseudonym('PERSON', real_value, 'org-1')
+    _, _, digest = pseudonym.rpartition('_')
+    unsalted_digest = hashlib.sha256(real_value.encode()).hexdigest()[:8]
+    assert digest != unsalted_digest
+
+
+def test_make_pseudonym_depends_on_secret():
+    """Fix #2: changing PSEUDONYM_SECRET must change the pseudonym for the
+    same (org_id, real_value) -- proves the digest is actually keyed by the
+    secret, not just incidentally different from unsalted sha256."""
+    pseudonym_before = pseudonymize._make_pseudonym('PERSON', 'Jane Doe', 'org-1')
+    with patch('pseudonymize.PSEUDONYM_SECRET', b'a-different-secret'):
+        pseudonym_after = pseudonymize._make_pseudonym('PERSON', 'Jane Doe', 'org-1')
+    assert pseudonym_before != pseudonym_after
 
 
 def test_reverse_cache_reflects_forward_refresh_without_waiting_out_own_ttl():
@@ -262,3 +335,171 @@ def test_redact_image_calls_presidio_image_redactor(monkeypatch):
     mock_to_pil.assert_called_once_with(b'original-png-bytes')
     mock_to_bytes.assert_called_once()
     assert result == fake_redacted_bytes
+
+
+def test_fetch_org_mapping_pages_past_1000_rows():
+    """Fix #1 (critical): a single unpaginated .select() silently truncates
+    at Supabase's default 1000-row cap, leaving every entity past #1000
+    unprotected (sent raw to LLMs, no error). _fetch_org_mapping must page
+    through with .range() until a page shorter than 1000 rows comes back,
+    accumulating every row across multiple .execute() calls."""
+    page1 = [
+        {'real_value': f'Person {i}', 'pseudonym': f'PERSON_{i:08x}'}
+        for i in range(1000)
+    ]
+    page2 = [
+        {'real_value': f'Person {i}', 'pseudonym': f'PERSON_{i:08x}'}
+        for i in range(1000, 1250)
+    ]
+    fake_supabase = _mock_supabase_table(
+        {'pseudonym_mappings': []},  # unused fallback -- range_pages drives this test
+        range_pages={'pseudonym_mappings': [page1, page2]},
+    )
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        mapping, pattern = pseudonymize._fetch_org_mapping('org-1')
+
+    assert len(mapping) == 1250
+    assert mapping['Person 0'] == 'PERSON_00000000'
+    assert mapping['Person 1249'] == f'PERSON_{1249:08x}'
+    # Confirms two .range() pages were actually fetched (not a single call).
+    range_mock = fake_supabase.table.return_value.select.return_value.eq.return_value.range
+    assert range_mock.return_value.execute.call_count == 2
+
+
+def test_pseudonymize_text_matches_pseudonym_token_case_insensitively():
+    """Fix #3: the graph-extraction LLM prompt instructs the model to
+    lowercase entity names, so a pseudonym token like 'PERSON_a1b2c3d4' can
+    come back from the LLM as 'person_a1b2c3d4'. deanonymize_text's match
+    must be case-insensitive but still substitute the CANONICAL stored
+    value regardless of the case actually matched."""
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_a1b2c3d4'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        # LLM echoed the pseudonym token back lowercased.
+        result = pseudonymize.deanonymize_text('person_a1b2c3d4 signed the report.', 'org-1')
+    assert result == 'Jane Doe signed the report.'
+
+
+def test_pseudonymize_text_matches_real_value_case_insensitively():
+    """Related residual-risk case from fix #3: a name typed in different
+    case than how it was indexed should still get pseudonymized."""
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        result = pseudonymize.pseudonymize_text('JANE DOE signed the report.', 'org-1')
+    assert result == 'PERSON_ab12 signed the report.'
+
+
+def _fake_module(name, **attrs):
+    """Build a bare types.ModuleType and inject it into sys.modules under
+    `name` via the returned context manager (patch.dict) -- lets tests
+    exercise pseudonymize's lazy `from presidio_x import Y` statements
+    without presidio actually being installed in this test environment
+    (it isn't; it's only a runtime dependency of the Docker image / GH
+    Actions runner per the module docstring)."""
+    import types
+    mod = types.ModuleType(name)
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    return mod
+
+
+def test_get_analyzer_configures_en_core_web_sm_nlp_engine():
+    """Fix #5: Presidio's default NlpEngineProvider() loads en_core_web_lg
+    (~400-560MB), but only en_core_web_sm is installed per the
+    Dockerfile/ingest.yml (Task 8). _get_analyzer must build an explicit
+    NlpEngineProvider(nlp_configuration=...) pinned to en_core_web_sm and
+    pass that engine into AnalyzerEngine(nlp_engine=...), not rely on
+    AnalyzerEngine()'s unconfigured default."""
+    import sys
+    pseudonymize._analyzer = None
+    try:
+        MockAnalyzerEngine = MagicMock()
+        MockProvider = MagicMock()
+        fake_engine = MagicMock()
+        MockProvider.return_value.create_engine.return_value = fake_engine
+
+        fake_presidio_analyzer = _fake_module('presidio_analyzer', AnalyzerEngine=MockAnalyzerEngine)
+        fake_nlp_engine_mod = _fake_module('presidio_analyzer.nlp_engine', NlpEngineProvider=MockProvider)
+        fake_presidio_analyzer.nlp_engine = fake_nlp_engine_mod
+
+        with patch.dict(sys.modules, {
+            'presidio_analyzer': fake_presidio_analyzer,
+            'presidio_analyzer.nlp_engine': fake_nlp_engine_mod,
+        }):
+            pseudonymize._get_analyzer()
+
+        MockProvider.assert_called_once_with(
+            nlp_configuration={
+                'nlp_engine_name': 'spacy',
+                'models': [{'lang_code': 'en', 'model_name': 'en_core_web_sm'}],
+            }
+        )
+        MockAnalyzerEngine.assert_called_once_with(nlp_engine=fake_engine)
+    finally:
+        pseudonymize._analyzer = None
+
+
+def test_get_image_redactor_shares_analyzer_engine():
+    """Fix #5: ImageRedactorEngine must reuse the SAME AnalyzerEngine
+    instance built via _get_analyzer() (already configured for
+    en_core_web_sm) rather than letting ImageRedactorEngine() construct
+    its own separate, unconfigured AnalyzerEngine (which would default to
+    en_core_web_lg the same way _get_analyzer() used to)."""
+    import sys
+    pseudonymize._analyzer = None
+    pseudonymize._image_redactor = None
+    try:
+        fake_analyzer = MagicMock()
+        MockImageAnalyzer = MagicMock()
+        MockRedactorEngine = MagicMock()
+        fake_presidio_image_redactor = _fake_module(
+            'presidio_image_redactor',
+            ImageAnalyzerEngine=MockImageAnalyzer,
+            ImageRedactorEngine=MockRedactorEngine,
+        )
+
+        with patch('pseudonymize._get_analyzer', return_value=fake_analyzer), \
+             patch.dict(sys.modules, {'presidio_image_redactor': fake_presidio_image_redactor}):
+            pseudonymize._get_image_redactor()
+
+        MockImageAnalyzer.assert_called_once_with(analyzer_engine=fake_analyzer)
+        MockRedactorEngine.assert_called_once_with(
+            image_analyzer_engine=MockImageAnalyzer.return_value
+        )
+    finally:
+        pseudonymize._analyzer = None
+        pseudonymize._image_redactor = None
+
+
+def test_fetch_org_mapping_reverse_returns_pattern_without_separate_fetch():
+    """Fix #8: _fetch_org_mapping_reverse must return (mapping, pattern)
+    atomically from its own cache read, so callers never need a second,
+    separate lock acquisition to re-fetch the pattern -- eliminating the
+    stale-pattern-vs-fresh-mapping race that caused KeyError in
+    _substitute."""
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        reverse_mapping, pattern = pseudonymize._fetch_org_mapping_reverse('org-1')
+    assert reverse_mapping == {'PERSON_ab12': 'Jane Doe'}
+    assert pattern is not None
+    assert pattern.search('PERSON_ab12') is not None
+
+
+def test_lazy_app_proxy_defers_import_and_stays_patchable():
+    """Fix #9: pseudonymize.app must not be a plain top-level `import app`
+    (that double-initializes Flask/clients if app.py is ever run directly
+    via `python app.py`, since the running script is registered in
+    sys.modules as '__main__', not 'app', so pseudonymize's own `import
+    app` would re-execute app.py as a second module). It must instead be a
+    lazy proxy that only imports on first attribute access, while still
+    being patchable via the existing `patch('pseudonymize.app.<attr>',
+    ...)` convention used throughout this file."""
+    assert isinstance(pseudonymize.app, pseudonymize._LazyApp)
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': []})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        assert pseudonymize.app.supabase_admin is fake_supabase

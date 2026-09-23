@@ -12,6 +12,7 @@ _REQUIRED_ENV_STUBS = {
     'GROQ_API_KEY': 'test-groq-key',
     'QDRANT_URL': 'https://test.qdrant.io',
     'QDRANT_API_KEY': 'test-qdrant-key',
+    'PSEUDONYM_SECRET': 'test-pseudonym-secret',
 }
 
 for key, value in _REQUIRED_ENV_STUBS.items():
