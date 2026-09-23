@@ -13,10 +13,12 @@ def _clear_mapping_cache():
     """_fetch_org_mapping's TTL cache is module-level state (Task 1). Most
     tests below reuse org_id='org-1', so a mapping cached by one test
     would otherwise leak into the next and produce order-dependent
-    failures."""
+    failures. Also clears the reverse-mapping cache for the same reason."""
     pseudonymize._mapping_cache.clear()
+    pseudonymize._reverse_mapping_cache.clear()
     yield
     pseudonymize._mapping_cache.clear()
+    pseudonymize._reverse_mapping_cache.clear()
 
 
 def _mock_supabase_table(rows_by_table):
@@ -189,3 +191,55 @@ def test_deanonymize_reverse_cache_is_atomic():
     assert reverse_mapping['PERSON_ab12'] == 'Jane Doe', "Reverse mapping should map pseudonym to real value"
     # Verify the pattern works on the reverse mapping
     assert result == 'Jane Doe signed.', "Deanonymize should work with atomic cache"
+
+
+def test_make_pseudonym_digest_is_8_hex_chars():
+    """4 hex chars (16 bits) collides ~50% of the time (birthday paradox) once
+    an org has ~300 distinct names of one entity type -- 8 hex chars (32 bits)
+    pushes that threshold out to ~77,000 names."""
+    pseudonym = pseudonymize._make_pseudonym('PERSON', 'Jane Doe')
+    prefix, _, digest = pseudonym.rpartition('_')
+    assert prefix == 'PERSON'
+    assert len(digest) == 8
+    assert all(c in '0123456789abcdef' for c in digest)
+
+
+def test_reverse_cache_reflects_forward_refresh_without_waiting_out_own_ttl():
+    """The reverse cache must never serve a mapping snapshot older than the
+    forward cache's current one. Before this fix, _fetch_org_mapping_reverse
+    tracked its own independent TTL clock, so within a single /ask request
+    the forward cache could pick up a newly-registered entity (via a
+    pseudonymize_text call elsewhere in the request) while the reverse
+    cache -- still "fresh" by its own clock -- kept serving the old
+    snapshot, leaving a literal pseudonym token in the deanonymized answer."""
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        # Populate both the forward and reverse caches with the initial mapping.
+        assert pseudonymize.deanonymize_text('PERSON_ab12 signed.', 'org-1') == 'Jane Doe signed.'
+
+    # A new entity gets registered mid-request (e.g. detect_and_register_entities
+    # during ingestion, or a concurrent request) -- Supabase now has it too.
+    fake_supabase2 = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
+        {'real_value': 'Acme Corp', 'pseudonym': 'ORG_cd34'},
+    ]})
+
+    # Force the forward cache to look expired (simulating TTL rollover)
+    # without touching the reverse cache directly -- isolates the scenario
+    # where the forward cache refreshes on its own schedule.
+    with pseudonymize._mapping_cache_lock:
+        fetched_at, mapping, pattern = pseudonymize._mapping_cache['org-1']
+        pseudonymize._mapping_cache['org-1'] = (
+            fetched_at - pseudonymize._MAPPING_CACHE_TTL_S - 1, mapping, pattern,
+        )
+
+    with patch('pseudonymize.app.supabase_admin', fake_supabase2):
+        # Something else in the request path refreshes the forward cache first.
+        pseudonymize._fetch_org_mapping('org-1')
+        # deanonymize_text must see the new entity immediately, not wait out
+        # its own independent TTL window.
+        result = pseudonymize.deanonymize_text('ORG_cd34 employs PERSON_ab12.', 'org-1')
+
+    assert result == 'Acme Corp employs Jane Doe.'

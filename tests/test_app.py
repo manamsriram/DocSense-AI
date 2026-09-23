@@ -1546,6 +1546,92 @@ def test_ask_file_agentic_deanonymizes_final_answer():
     assert response == 'Signed by Jane Doe.'
 
 
+def test_ask_file_agentic_pseudonymizes_conversation_history_before_generate_text():
+    """conversation_history's raw question/answer text must not reach
+    generate_text -- it's placed directly into the provider messages,
+    bypassing the prompt's own pseudonymization, so a prior turn's real PII
+    (e.g. a name) would otherwise leak on every multi-turn request."""
+    import app
+    captured = {}
+
+    def fake_generate_text(prompt, conversation_history=None):
+        captured['history'] = conversation_history
+        return 'Answer'
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] some text')
+    prior_turns = [{'question': 'Who is Jane Doe?', 'answer': 'Jane Doe is the CFO.'}]
+
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=lambda q, texts: (texts, [])), \
+         patch('app.generate_text', side_effect=fake_generate_text):
+        app.ask_file_agentic('What about her role?', 'user-1', conversation_history=prior_turns)
+
+    assert captured['history'] == [{'question': 'Who is PERSON_ab12?', 'answer': 'PERSON_ab12 is the CFO.'}]
+    assert 'Jane Doe' not in str(captured['history'])
+    # The raw object handed in must stay untouched -- callers reuse it for
+    # query_history storage and for what's shown in the UI.
+    assert prior_turns == [{'question': 'Who is Jane Doe?', 'answer': 'Jane Doe is the CFO.'}]
+
+
+def test_ask_file_pseudonymizes_conversation_history_before_generate_text():
+    """Same guarantee as above for the non-agentic ask_file() fallback path."""
+    import app
+    captured = {}
+
+    def fake_generate_text(prompt, conversation_history=None):
+        captured['history'] = conversation_history
+        return 'Answer'
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Some text')
+    prior_turns = [{'question': 'Who is Jane Doe?', 'answer': 'Jane Doe is the CFO.'}]
+
+    with patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.find_relevant_chunks', return_value=[chunk]), \
+         patch('app.generate_text', side_effect=fake_generate_text):
+        app.ask_file('What about her role?', 'user-1', conversation_history=prior_turns)
+
+    assert captured['history'] == [{'question': 'Who is PERSON_ab12?', 'answer': 'PERSON_ab12 is the CFO.'}]
+    assert 'Jane Doe' not in str(captured['history'])
+
+
+def test_ask_file_agentic_short_question_skips_decompose_deanonymize_roundtrip():
+    """decompose_query's <=10-word fast path returns [pseudo_question] without
+    making an LLM call -- deanonymizing it back would be a pointless lossy
+    round trip. The raw `question` must be used directly as the sole
+    sub-query instead."""
+    import app
+    chunk = (0.9, '[Page 1, Source: doc.pdf] relevant content')
+    deanonymize_calls = []
+
+    def fake_deanonymize(text, org_id):
+        deanonymize_calls.append(text)
+        return text
+
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=fake_deanonymize), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
+         patch('app.grade_chunks', return_value=([chunk[1]], [])), \
+         patch('app.generate_text', return_value='Answer'):
+        response, sources = app.ask_file_agentic('short question', 'user-1')
+
+    assert response == 'Answer'
+    # Retrieval used the raw question directly as the sub-query.
+    assert mock_retrieve.call_args.args[0] == 'short question'
+    # decompose_query's identity output was never round-tripped through
+    # deanonymize_text (only the final answer was).
+    assert 'short question' not in deanonymize_calls
+
+
 # ---- Pass 3, item B: org-level graph tier ----
 
 def _org_supabase_mock(org_members_data=None, orgs_insert_data=None, member_inserts=None):

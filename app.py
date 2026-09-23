@@ -1789,6 +1789,28 @@ def build_source(score, text, org_id):
     return source, pseudonymize.pseudonymize_text(clean, org_id)
 
 
+def _pseudonymize_conversation_history(conversation_history, org_id):
+    """Return a pseudonymized copy of conversation_history for the LLM call.
+
+    generate_text() puts each turn's question/answer directly into the
+    provider messages -- a raw conversation_history would leak real PII
+    from prior turns even when the current prompt is pseudonymized. This
+    copy is only for the LLM call; callers must keep using the raw
+    conversation_history for query_history storage and anything shown in
+    the UI.
+    """
+    if not conversation_history:
+        return conversation_history
+    return [
+        {
+            **turn,
+            'question': pseudonymize.pseudonymize_text(turn['question'], org_id),
+            'answer': pseudonymize.pseudonymize_text(turn['answer'], org_id),
+        }
+        for turn in conversation_history
+    ]
+
+
 def ask_file(question, user_id, conversation_history=None):
     """Return (response_text, sources) for a specific user's documents."""
     org_id = get_or_create_org_for_user(user_id)
@@ -1809,7 +1831,8 @@ def ask_file(question, user_id, conversation_history=None):
         sources.append(source)
 
     prompt += f"Question: {pseudonymize.pseudonymize_text(question, org_id)}\nAnswer:"
-    response = generate_text(prompt, conversation_history=conversation_history)
+    pseudo_history = _pseudonymize_conversation_history(conversation_history, org_id)
+    response = generate_text(prompt, conversation_history=pseudo_history)
     if response is None:
         return None, []
     return pseudonymize.deanonymize_text(response, org_id), sources
@@ -1833,7 +1856,16 @@ def ask_file_agentic(question, user_id, conversation_history=None):
         pseudo_question = pseudonymize.pseudonymize_text(question, org_id)
 
         sub_queries_pseudo = _timed("decompose_query", decompose_query, pseudo_question)
-        sub_queries = [pseudonymize.deanonymize_text(sq, org_id) for sq in sub_queries_pseudo]
+        if sub_queries_pseudo == [pseudo_question]:
+            # Short-question fast path (see decompose_query's <=10-word heuristic):
+            # no LLM call was made, so sub_queries_pseudo is just the identity
+            # wrapper around pseudo_question. Skip the deanonymize round-trip
+            # and use the original raw question directly -- avoids an
+            # unnecessary lossy pseudonymize/deanonymize pass on the common
+            # short-question path.
+            sub_queries = [question]
+        else:
+            sub_queries = [pseudonymize.deanonymize_text(sq, org_id) for sq in sub_queries_pseudo]
         logging.info(f"[agentic] decomposed into {len(sub_queries)} sub-queries: {sub_queries}")
         complexity = estimate_query_complexity(question, sub_query_count=len(sub_queries))
 
@@ -1908,7 +1940,8 @@ def ask_file_agentic(question, user_id, conversation_history=None):
             sources.append(source)
 
         prompt += f"Question: {pseudo_question}\nAnswer:"
-        response = _timed("generate_text", generate_text, prompt, conversation_history=conversation_history)
+        pseudo_history = _pseudonymize_conversation_history(conversation_history, org_id)
+        response = _timed("generate_text", generate_text, prompt, conversation_history=pseudo_history)
         if response is None:
             return None, []
 

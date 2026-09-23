@@ -30,7 +30,10 @@ def get_org_entity_types(org_id):
 
 
 def _make_pseudonym(entity_type, real_value):
-    digest = hashlib.sha256(real_value.encode()).hexdigest()[:4]
+    # 8 hex chars (32 bits) -- 4 chars (16 bits) collides ~50% of the time
+    # (birthday paradox) once an org has ~300 distinct names of one entity
+    # type, which could put the wrong real name in a deanonymized answer.
+    digest = hashlib.sha256(real_value.encode()).hexdigest()[:8]
     return f'{entity_type}_{digest}'
 
 
@@ -101,18 +104,32 @@ def _fetch_org_mapping(org_id):
 
 
 def _fetch_org_mapping_reverse(org_id):
+    """Reverse-mapping cache tracks the SAME fetch as the forward cache --
+    it stores the forward cache's fetched_at (not its own independent
+    fetch time), and rebuilds only when that fetched_at has moved on.
+    This is deliberate: a reverse cache with its own independent TTL clock
+    can serve a stale snapshot while the forward cache has already picked
+    up a newly-registered entity mid-request, which can leave a literal
+    pseudonym token in a deanonymized answer (or swap the wrong entity).
+    Tying the two together means forward and reverse can never disagree
+    within the same TTL window.
+    """
+    # Ensures the forward cache is fresh (refetches if its TTL expired);
+    # idempotent no-op cost if it's still fresh.
+    _fetch_org_mapping(org_id)
+    with _mapping_cache_lock:
+        forward_fetched_at, forward_mapping, _ = _mapping_cache[org_id]
+
     with _reverse_mapping_cache_lock:
         cached = _reverse_mapping_cache.get(org_id)
-        if cached and time.monotonic() - cached[0] < _MAPPING_CACHE_TTL_S:
+        if cached and cached[0] == forward_fetched_at:
             return cached[1]
 
-    # Fetch forward mapping to build reverse; pattern must come from same fetch
-    forward_mapping = _fetch_org_mapping(org_id)
     reverse_mapping = {pseudonym: real for real, pseudonym in forward_mapping.items()}
     reverse_pattern = _compile_pattern(reverse_mapping)
 
     with _reverse_mapping_cache_lock:
-        _reverse_mapping_cache[org_id] = (time.monotonic(), reverse_mapping, reverse_pattern)
+        _reverse_mapping_cache[org_id] = (forward_fetched_at, reverse_mapping, reverse_pattern)
     return reverse_mapping
 
 
