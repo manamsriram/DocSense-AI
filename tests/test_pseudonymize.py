@@ -151,3 +151,14 @@ def test_deanonymize_text_reverses_pseudonymize_text():
         pseudo = pseudonymize.pseudonymize_text('Jane Doe signed.', 'org-1')
         original = pseudonymize.deanonymize_text(pseudo, 'org-1')
     assert original == 'Jane Doe signed.'
+
+
+def test_pseudonymize_text_word_boundaries_prevent_substring_corruption():
+    """Verify that word boundaries prevent "John" from matching inside "Johnny"."""
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'John', 'pseudonym': 'PERSON_aaaa'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        # "Johnny" should not be corrupted because "John" is not a complete word inside it
+        result = pseudonymize.pseudonymize_text('Johnny and John both signed.', 'org-1')
+    assert result == 'Johnny and PERSON_aaaa both signed.'

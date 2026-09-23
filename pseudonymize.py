@@ -63,8 +63,23 @@ def get_or_create_pseudonym(org_id, real_value, entity_type):
 # reformulation, plus the final answer). One Supabase round-trip per org
 # per _MAPPING_CACHE_TTL_S window instead of per call.
 _MAPPING_CACHE_TTL_S = 30
-_mapping_cache = {}   # org_id -> (fetched_at, {real_value: pseudonym})
+_mapping_cache = {}   # org_id -> (fetched_at, {real_value: pseudonym}, compiled_pattern)
 _mapping_cache_lock = threading.Lock()
+
+# Separate cache for reverse (deanonymize) patterns to avoid recompiling
+_reverse_pattern_cache = {}  # org_id -> (fetched_at, compiled_reverse_pattern)
+_reverse_pattern_cache_lock = threading.Lock()
+
+
+def _compile_pattern(mapping):
+    """Compile regex pattern with word boundaries to prevent partial matches.
+    Example: "John" will not match inside "Johnny" or "Johnson"."""
+    if not mapping:
+        return None
+    # Build pattern with word boundaries: \b(?:...|...)\b
+    # This prevents "John" from matching inside "Johnny"
+    pattern_str = r'\b(?:' + '|'.join(re.escape(k) for k in sorted(mapping, key=len, reverse=True)) + r')\b'
+    return re.compile(pattern_str)
 
 
 def _fetch_org_mapping(org_id):
@@ -75,9 +90,10 @@ def _fetch_org_mapping(org_id):
 
     res = app.supabase_admin.table('pseudonym_mappings').select('real_value,pseudonym').eq('org_id', org_id).execute()
     mapping = {row['real_value']: row['pseudonym'] for row in res.data}
+    pattern = _compile_pattern(mapping)
 
     with _mapping_cache_lock:
-        _mapping_cache[org_id] = (time.monotonic(), mapping)
+        _mapping_cache[org_id] = (time.monotonic(), mapping, pattern)
     return mapping
 
 
@@ -91,6 +107,8 @@ def _invalidate_mapping_cache(org_id):
     pseudonym is usable in a query."""
     with _mapping_cache_lock:
         _mapping_cache.pop(org_id, None)
+    with _reverse_pattern_cache_lock:
+        _reverse_pattern_cache.pop(org_id, None)
 
 
 _analyzer = None
@@ -122,17 +140,38 @@ def detect_and_register_entities(text, org_id):
         get_or_create_pseudonym(org_id, real_value, r.entity_type)
 
 
-def _substitute(text, mapping):
+def _get_reverse_pattern(reverse_mapping, org_id):
+    """Get or compile the reverse pattern (for deanonymize_text), cached by org_id."""
+    with _reverse_pattern_cache_lock:
+        cached = _reverse_pattern_cache.get(org_id)
+        if cached and time.monotonic() - cached[0] < _MAPPING_CACHE_TTL_S:
+            return cached[1]
+
+    pattern = _compile_pattern(reverse_mapping)
+    with _reverse_pattern_cache_lock:
+        _reverse_pattern_cache[org_id] = (time.monotonic(), pattern)
+    return pattern
+
+
+def _substitute(text, mapping, pattern):
     if not mapping:
         return text
-    # Longest keys first so "John Smith" wins over a bare "John" inside it.
-    pattern = re.compile('|'.join(re.escape(k) for k in sorted(mapping, key=len, reverse=True)))
+    if pattern is None:
+        # Fallback (shouldn't happen with new code, but keeps _substitute robust)
+        pattern = _compile_pattern(mapping)
     return pattern.sub(lambda m: mapping[m.group(0)], text)
 
 
 def pseudonymize_text(text, org_id):
-    return _substitute(text, _fetch_org_mapping(org_id))
+    mapping = _fetch_org_mapping(org_id)
+    # Pattern is cached in _mapping_cache, retrieve it
+    with _mapping_cache_lock:
+        cached = _mapping_cache.get(org_id)
+        pattern = cached[2] if cached else None
+    return _substitute(text, mapping, pattern)
 
 
 def deanonymize_text(text, org_id):
-    return _substitute(text, _fetch_org_mapping_reverse(org_id))
+    reverse_mapping = _fetch_org_mapping_reverse(org_id)
+    pattern = _get_reverse_pattern(reverse_mapping, org_id)
+    return _substitute(text, reverse_mapping, pattern)
