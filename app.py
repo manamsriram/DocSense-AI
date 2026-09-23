@@ -1762,11 +1762,15 @@ _SOURCE_RE = re.compile(r'^\[Page (\d+), Source: ([^\]]+)\]\s*(.*)', re.DOTALL)
 _FIGURE_MARKER_RE = re.compile(r'\[Figure: ([^\]]+)\]\s*')
 
 
-def build_source(score, text):
+def build_source(score, text, org_id):
     """Parse a display chunk into a source dict. Returns (source, prompt_text).
 
     Figure chunks carry their storage path in a [Figure: path] marker; it is
     surfaced as image_path and stripped from the text sent to the LLM.
+
+    source['text'] is always the raw value (citations shown to the user must
+    stay real). prompt_text is pseudonymized -- it's the only copy of this
+    chunk that reaches an LLM.
     """
     m_fig = _FIGURE_MARKER_RE.search(text)
     clean = _FIGURE_MARKER_RE.sub('', text)
@@ -1782,11 +1786,12 @@ def build_source(score, text):
         source = {'page': 0, 'source': 'unknown', 'text': clean, 'score': round(score, 4)}
     if m_fig:
         source['image_path'] = m_fig.group(1)
-    return source, clean
+    return source, pseudonymize.pseudonymize_text(clean, org_id)
 
 
 def ask_file(question, user_id, conversation_history=None):
     """Return (response_text, sources) for a specific user's documents."""
+    org_id = get_or_create_org_for_user(user_id)
     complexity = estimate_query_complexity(question)
     scored_chunks = find_relevant_chunks(question, user_id, top_n=complexity['top_n'], top_k=complexity['top_k'])
     if not scored_chunks:
@@ -1799,25 +1804,36 @@ def ask_file(question, user_id, conversation_history=None):
         "If the answer is not in the excerpts, say so.\n\n"
     )
     for score, text in scored_chunks:
-        source, prompt_text = build_source(score, text)
+        source, prompt_text = build_source(score, text, org_id)
         prompt += f"{prompt_text}\n\n"
         sources.append(source)
 
-    prompt += f"Question: {question}\nAnswer:"
+    prompt += f"Question: {pseudonymize.pseudonymize_text(question, org_id)}\nAnswer:"
     response = generate_text(prompt, conversation_history=conversation_history)
     if response is None:
         return None, []
-    return response, sources
+    return pseudonymize.deanonymize_text(response, org_id), sources
 
 
 def ask_file_agentic(question, user_id, conversation_history=None):
-    """Agentic RAG: query decomp + CRAG loop + synthesis. Falls back to ask_file() on error."""
+    """Agentic RAG: query decomp + CRAG loop + synthesis. Falls back to ask_file() on error.
+
+    Raw chunk/question text never reaches an LLM call on this path -- only
+    pseudonymized copies are sent to decompose_query/grade_chunks/
+    reformulate_query/generate_text. Retrieval (find_relevant_chunks_with_graph)
+    keeps consuming raw text throughout, since it's not an LLM call and must
+    not change behavior. The final answer is deanonymized before it's returned.
+    """
     t_total = time.perf_counter()
     try:
         if get_collection_count(user_id) == 0:
             return "No documents have been indexed yet. Please upload a PDF first.", []
 
-        sub_queries = _timed("decompose_query", decompose_query, question)
+        org_id = get_or_create_org_for_user(user_id)
+        pseudo_question = pseudonymize.pseudonymize_text(question, org_id)
+
+        sub_queries_pseudo = _timed("decompose_query", decompose_query, pseudo_question)
+        sub_queries = [pseudonymize.deanonymize_text(sq, org_id) for sq in sub_queries_pseudo]
         logging.info(f"[agentic] decomposed into {len(sub_queries)} sub-queries: {sub_queries}")
         complexity = estimate_query_complexity(question, sub_query_count=len(sub_queries))
 
@@ -1845,8 +1861,13 @@ def ask_file_agentic(question, user_id, conversation_history=None):
                     break
 
                 texts = [text for _, text in scored]
+                pseudo_texts = [pseudonymize.pseudonymize_text(t, org_id) for t in texts]
+                pseudo_sub_q = pseudonymize.pseudonymize_text(sub_q, org_id)
                 try:
-                    relevant, _ = _timed(f"grade_chunks_iter{iteration}", grade_chunks, sub_q, texts)
+                    relevant_pseudo, _ = _timed(f"grade_chunks_iter{iteration}", grade_chunks, pseudo_sub_q, pseudo_texts)
+                    # grade_chunks returns a subset of its input list by value;
+                    # map back to the matching raw texts by position.
+                    relevant = [texts[pseudo_texts.index(pt)] for pt in relevant_pseudo]
                 except GradingUnavailableError:
                     logging.warning(f"[agentic] grading unavailable, using retrieved chunks as-is for '{sub_q}'")
                     relevant = texts
@@ -1856,7 +1877,11 @@ def ask_file_agentic(question, user_id, conversation_history=None):
                     break
 
                 logging.info(f"[agentic] no relevant chunks for '{retrieval_query}' (iter {iteration}), reformulating")
-                retrieval_query = _timed("reformulate_query", reformulate_query, retrieval_query)
+                pseudo_reformulated = _timed(
+                    "reformulate_query", reformulate_query,
+                    pseudonymize.pseudonymize_text(retrieval_query, org_id),
+                )
+                retrieval_query = pseudonymize.deanonymize_text(pseudo_reformulated, org_id)
                 iter_top_k = int(iter_top_k * 1.5)
                 reformulation_count += 1
 
@@ -1878,15 +1903,16 @@ def ask_file_agentic(question, user_id, conversation_history=None):
             "If the answer is not in the excerpts, say so.\n\n"
         )
         for score, text in sorted(all_chunks, key=lambda x: x[0], reverse=True)[:complexity['synthesis_top_n']]:
-            source, prompt_text = build_source(score, text)
+            source, prompt_text = build_source(score, text, org_id)
             prompt += f"{prompt_text}\n\n"
             sources.append(source)
 
-        prompt += f"Question: {question}\nAnswer:"
+        prompt += f"Question: {pseudo_question}\nAnswer:"
         response = _timed("generate_text", generate_text, prompt, conversation_history=conversation_history)
         if response is None:
             return None, []
 
+        response = pseudonymize.deanonymize_text(response, org_id)
         logging.info(f"[perf] ask_file_agentic total: {(time.perf_counter() - t_total) * 1000:.1f}ms")
         return response, sources
 

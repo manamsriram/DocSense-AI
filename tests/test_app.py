@@ -320,6 +320,9 @@ def test_ask_multi_turn_skips_semantic_cache():
     chunk = (0.9, '[Page 1, Source: doc.pdf] Some context')
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain(data=prior_turns)), \
+         patch('app.get_or_create_org_for_user', return_value='org-multiturn-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['Can you elaborate?']), \
          patch('app.grade_chunks', return_value=([chunk[1]], [])), \
@@ -396,6 +399,9 @@ def test_ask_multi_turn_passes_history_to_llm():
     chunk = (0.9, '[Page 1, Source: doc.pdf] Some context')
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain(data=prior_turns)), \
+         patch('app.get_or_create_org_for_user', return_value='org-multiturn-2'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['Can you elaborate?']), \
          patch('app.grade_chunks', return_value=([chunk[1]], [])), \
@@ -445,6 +451,9 @@ def test_ask_saves_session_id_to_history():
     chunk = (0.9, '[Page 1, Source: doc.pdf] Context')
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', supabase_mock), \
+         patch('app.get_or_create_org_for_user', return_value='org-session-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['What is Y?']), \
          patch('app.grade_chunks', return_value=([chunk[1]], [])), \
@@ -607,7 +616,8 @@ def test_find_caption_none_when_no_nearby_text():
 
 def test_build_source_plain_text_chunk():
     from app import build_source
-    source, prompt_text = build_source(0.9, '[Page 3, Source: report.pdf] Some excerpt text')
+    with patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t):
+        source, prompt_text = build_source(0.9, '[Page 3, Source: report.pdf] Some excerpt text', 'org-1')
     assert source['page'] == 3
     assert source['source'] == 'report.pdf'
     assert source['text'] == 'Some excerpt text'
@@ -618,7 +628,8 @@ def test_build_source_plain_text_chunk():
 def test_build_source_figure_chunk_extracts_image_path():
     from app import build_source
     text = '[Page 2, Source: report.pdf] [Figure: user1/figures/report.pdf/p2_f0.png] Figure 1: Revenue'
-    source, prompt_text = build_source(0.8, text)
+    with patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t):
+        source, prompt_text = build_source(0.8, text, 'org-1')
     assert source['image_path'] == 'user1/figures/report.pdf/p2_f0.png'
     assert source['text'] == 'Figure 1: Revenue'
     assert '[Figure:' not in prompt_text
@@ -626,9 +637,20 @@ def test_build_source_figure_chunk_extracts_image_path():
 
 def test_build_source_unparseable_falls_back():
     from app import build_source
-    source, _ = build_source(0.5, 'raw text without prefix')
+    with patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t):
+        source, _ = build_source(0.5, 'raw text without prefix', 'org-1')
     assert source['page'] == 0
     assert source['source'] == 'unknown'
+
+
+def test_build_source_keeps_citation_raw_but_pseudonymizes_prompt_text():
+    """source['text'] (shown to the user as a citation) must stay the real value;
+    prompt_text (the only copy that reaches an LLM) is the pseudonymized one."""
+    from app import build_source
+    with patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')):
+        source, prompt_text = build_source(0.9, '[Page 1, Source: doc.pdf] Jane Doe signed.', 'org-1')
+    assert source['text'] == 'Jane Doe signed.'
+    assert prompt_text == '[Page 1, Source: doc.pdf] PERSON_ab12 signed.'
 
 
 # ---- /figure-url tests ----
@@ -1402,6 +1424,9 @@ def test_ask_file_agentic_stops_iterating_once_relevant_chunks_found():
     from app import ask_file_agentic
     chunk = (0.9, '[Page 1, Source: doc.pdf] relevant content')
     with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
          patch('app.grade_chunks', return_value=([chunk[1]], [])) as mock_grade, \
@@ -1419,6 +1444,9 @@ def test_ask_file_agentic_bounded_by_max_iterations_when_nothing_ever_relevant()
     import app
     chunk = (0.5, '[Page 1, Source: doc.pdf] never graded relevant')
     with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
          patch('app.grade_chunks', return_value=([], [chunk[1]])), \
@@ -1439,6 +1467,9 @@ def test_ask_file_agentic_grading_failure_uses_retrieved_chunks_without_burning_
     from app import GradingUnavailableError
     chunk = (0.7, '[Page 1, Source: doc.pdf] some content')
     with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
          patch('app.grade_chunks', side_effect=GradingUnavailableError('grader down')), \
@@ -1457,6 +1488,9 @@ def test_ask_file_agentic_wall_clock_budget_stops_further_iterations():
     import app
     chunk = (0.5, '[Page 1, Source: doc.pdf] slow content')
     with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.CRAG_WALL_CLOCK_BUDGET_S', 0), \
          patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
@@ -1467,6 +1501,49 @@ def test_ask_file_agentic_wall_clock_budget_stops_further_iterations():
 
     # budget is already exhausted before the first iteration even starts
     assert mock_retrieve.call_count == 0
+
+
+def test_ask_file_agentic_sends_pseudonymized_prompt_to_generate_text():
+    """Raw chunk/question text must never reach the synthesis generate_text call --
+    only the pseudonymized copy."""
+    import app
+    captured = {}
+
+    def fake_generate_text(prompt, conversation_history=None):
+        captured['prompt'] = prompt
+        return 'The answer.'
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Jane Doe signed.')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=lambda q, texts: (texts, [])), \
+         patch('app.generate_text', side_effect=fake_generate_text):
+        app.ask_file_agentic('Who signed?', 'user-1')
+
+    assert 'PERSON_ab12' in captured['prompt']
+    assert 'Jane Doe' not in captured['prompt']
+
+
+def test_ask_file_agentic_deanonymizes_final_answer():
+    """The final answer handed back to the caller must be deanonymized -- an LLM
+    that echoes a pseudonym token back must never leak it to the user."""
+    import app
+    chunk = (0.9, '[Page 1, Source: doc.pdf] some text')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t.replace('PERSON_ab12', 'Jane Doe')), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=lambda q, texts: (texts, [])), \
+         patch('app.generate_text', return_value='Signed by PERSON_ab12.'):
+        response, _ = app.ask_file_agentic('Who signed?', 'user-1')
+
+    assert response == 'Signed by Jane Doe.'
 
 
 # ---- Pass 3, item B: org-level graph tier ----
