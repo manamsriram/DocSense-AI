@@ -162,3 +162,30 @@ def test_pseudonymize_text_word_boundaries_prevent_substring_corruption():
         # "Johnny" should not be corrupted because "John" is not a complete word inside it
         result = pseudonymize.pseudonymize_text('Johnny and John both signed.', 'org-1')
     assert result == 'Johnny and PERSON_aaaa both signed.'
+
+
+def test_deanonymize_reverse_cache_is_atomic():
+    """Verify that reverse mapping and compiled pattern come from the same
+    cache entry, preventing stale-pattern-vs-fresh-mapping races."""
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        # Call deanonymize_text to populate the reverse cache
+        text = 'PERSON_ab12 signed.'
+        result = pseudonymize.deanonymize_text(text, 'org-1')
+
+    # Verify cache entry exists and contains both mapping (index 1) and pattern (index 2)
+    with pseudonymize._reverse_mapping_cache_lock:
+        cached = pseudonymize._reverse_mapping_cache.get('org-1')
+
+    # Cache tuple should be (fetched_at, reverse_mapping, compiled_pattern)
+    assert cached is not None, "Reverse cache entry should exist after deanonymize_text"
+    assert len(cached) == 3, "Cache entry should have (fetched_at, reverse_mapping, pattern)"
+    fetched_at, reverse_mapping, pattern = cached
+    assert isinstance(reverse_mapping, dict), "Second element should be reverse mapping dict"
+    assert pattern is not None, "Third element should be compiled pattern (not None)"
+    assert 'PERSON_ab12' in reverse_mapping, "Reverse mapping should contain pseudonym"
+    assert reverse_mapping['PERSON_ab12'] == 'Jane Doe', "Reverse mapping should map pseudonym to real value"
+    # Verify the pattern works on the reverse mapping
+    assert result == 'Jane Doe signed.', "Deanonymize should work with atomic cache"

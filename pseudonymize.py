@@ -66,9 +66,12 @@ _MAPPING_CACHE_TTL_S = 30
 _mapping_cache = {}   # org_id -> (fetched_at, {real_value: pseudonym}, compiled_pattern)
 _mapping_cache_lock = threading.Lock()
 
-# Separate cache for reverse (deanonymize) patterns to avoid recompiling
-_reverse_pattern_cache = {}  # org_id -> (fetched_at, compiled_reverse_pattern)
-_reverse_pattern_cache_lock = threading.Lock()
+# Reverse mapping cache with its own compiled pattern. Atomic tuple ensures
+# pattern and mapping always come from the same fetch — prevents stale pattern
+# matching against fresh (or vice versa) when pseudonymize/deanonymize are
+# called at different cadences within a request.
+_reverse_mapping_cache = {}  # org_id -> (fetched_at, {pseudonym: real_value}, compiled_reverse_pattern)
+_reverse_mapping_cache_lock = threading.Lock()
 
 
 def _compile_pattern(mapping):
@@ -98,7 +101,19 @@ def _fetch_org_mapping(org_id):
 
 
 def _fetch_org_mapping_reverse(org_id):
-    return {pseudonym: real for real, pseudonym in _fetch_org_mapping(org_id).items()}
+    with _reverse_mapping_cache_lock:
+        cached = _reverse_mapping_cache.get(org_id)
+        if cached and time.monotonic() - cached[0] < _MAPPING_CACHE_TTL_S:
+            return cached[1]
+
+    # Fetch forward mapping to build reverse; pattern must come from same fetch
+    forward_mapping = _fetch_org_mapping(org_id)
+    reverse_mapping = {pseudonym: real for real, pseudonym in forward_mapping.items()}
+    reverse_pattern = _compile_pattern(reverse_mapping)
+
+    with _reverse_mapping_cache_lock:
+        _reverse_mapping_cache[org_id] = (time.monotonic(), reverse_mapping, reverse_pattern)
+    return reverse_mapping
 
 
 def _invalidate_mapping_cache(org_id):
@@ -107,8 +122,8 @@ def _invalidate_mapping_cache(org_id):
     pseudonym is usable in a query."""
     with _mapping_cache_lock:
         _mapping_cache.pop(org_id, None)
-    with _reverse_pattern_cache_lock:
-        _reverse_pattern_cache.pop(org_id, None)
+    with _reverse_mapping_cache_lock:
+        _reverse_mapping_cache.pop(org_id, None)
 
 
 _analyzer = None
@@ -140,19 +155,6 @@ def detect_and_register_entities(text, org_id):
         get_or_create_pseudonym(org_id, real_value, r.entity_type)
 
 
-def _get_reverse_pattern(reverse_mapping, org_id):
-    """Get or compile the reverse pattern (for deanonymize_text), cached by org_id."""
-    with _reverse_pattern_cache_lock:
-        cached = _reverse_pattern_cache.get(org_id)
-        if cached and time.monotonic() - cached[0] < _MAPPING_CACHE_TTL_S:
-            return cached[1]
-
-    pattern = _compile_pattern(reverse_mapping)
-    with _reverse_pattern_cache_lock:
-        _reverse_pattern_cache[org_id] = (time.monotonic(), pattern)
-    return pattern
-
-
 def _substitute(text, mapping, pattern):
     if not mapping:
         return text
@@ -173,5 +175,8 @@ def pseudonymize_text(text, org_id):
 
 def deanonymize_text(text, org_id):
     reverse_mapping = _fetch_org_mapping_reverse(org_id)
-    pattern = _get_reverse_pattern(reverse_mapping, org_id)
+    # Pattern is cached atomically with reverse_mapping in _reverse_mapping_cache
+    with _reverse_mapping_cache_lock:
+        cached = _reverse_mapping_cache.get(org_id)
+        pattern = cached[2] if cached else None
     return _substitute(text, reverse_mapping, pattern)
