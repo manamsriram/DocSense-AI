@@ -905,6 +905,62 @@ def test_index_pdf_registers_entities_for_each_flushed_chunk(tmp_path):
     assert any('John Smith' in text for text, _ in calls)
 
 
+def test_index_pdf_continues_indexing_when_entity_registration_fails(tmp_path):
+    """detect_and_register_entities is an auxiliary side effect (populating the
+    pseudonymization mapping table), not part of the retrieval-critical path —
+    a Presidio/Supabase failure registering one chunk's entities must not abort
+    indexing of that chunk or the document. The upsert must still happen."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Contact Jane Doe at jane.doe@example.com for details.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    with patch('app.get_or_create_org_for_user', return_value='org-entity-fail-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('pseudonymize.detect_and_register_entities',
+               side_effect=RuntimeError('supabase unavailable')):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'entity-fail-test-user', display_name='doc.pdf')
+
+    assert result > 0
+    mock_qdrant.upsert.assert_called_once()
+
+
+def test_index_pdf_flushes_normally_when_no_entities_detected(tmp_path):
+    """A chunk with zero detected entities (detect_and_register_entities is a
+    no-op / registers nothing) must still flush/upsert like any other chunk."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "This page has no personal information in it at all.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    calls = []
+    with patch('app.get_or_create_org_for_user', return_value='org-no-entities-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('pseudonymize.detect_and_register_entities',
+               side_effect=lambda text, org_id: calls.append((text, org_id))):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'no-entities-test-user', display_name='doc.pdf')
+
+    assert result > 0
+    assert len(calls) > 0  # detect_and_register_entities was still called per chunk
+    mock_qdrant.upsert.assert_called_once()
+
+
 # ---- Item A-Graph: incremental in-memory graph patching ----
 
 def _graph_supabase_mock(edges_data=None, nodes_data=None):

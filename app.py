@@ -742,7 +742,10 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
         if not points:
             return
         for _, _, display_text, _ in points:
-            pseudonymize.detect_and_register_entities(display_text, org_id)
+            try:
+                pseudonymize.detect_and_register_entities(display_text, org_id)
+            except Exception as e:
+                logging.warning(f"[pseudonymize] entity registration failed for org {org_id}: {e}")
         vecs = list(get_embedding_model().embed(embed_texts))
         qdrant.upsert(
             collection_name=COLLECTION,
