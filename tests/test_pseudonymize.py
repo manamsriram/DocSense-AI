@@ -115,3 +115,39 @@ def test_detect_and_register_entities_registers_each_detected_entity():
     upserted = fake_supabase.table.return_value.upsert.call_args[0][0]
     assert upserted['real_value'] == 'Jane Doe'
     assert upserted['entity_type'] == 'PERSON'
+
+
+def test_pseudonymize_text_replaces_known_real_values():
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        result = pseudonymize.pseudonymize_text('Jane Doe signed the report.', 'org-1')
+    assert result == 'PERSON_ab12 signed the report.'
+
+
+def test_pseudonymize_text_prefers_longest_match():
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'John', 'pseudonym': 'PERSON_aaaa'},
+        {'real_value': 'John Smith', 'pseudonym': 'PERSON_bbbb'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        result = pseudonymize.pseudonymize_text('John Smith and John both signed.', 'org-1')
+    assert result == 'PERSON_bbbb and PERSON_aaaa both signed.'
+
+
+def test_pseudonymize_text_leaves_unknown_text_unchanged():
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': []})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        result = pseudonymize.pseudonymize_text('Nothing sensitive here.', 'org-1')
+    assert result == 'Nothing sensitive here.'
+
+
+def test_deanonymize_text_reverses_pseudonymize_text():
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        pseudo = pseudonymize.pseudonymize_text('Jane Doe signed.', 'org-1')
+        original = pseudonymize.deanonymize_text(pseudo, 'org-1')
+    assert original == 'Jane Doe signed.'

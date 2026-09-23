@@ -10,6 +10,7 @@ baseline RAM to the dyno even on requests that never touch this code.
 """
 import hashlib
 import os
+import re
 import threading
 import time
 
@@ -119,3 +120,19 @@ def detect_and_register_entities(text, org_id):
     for r in results:
         real_value = text[r.start:r.end]
         get_or_create_pseudonym(org_id, real_value, r.entity_type)
+
+
+def _substitute(text, mapping):
+    if not mapping:
+        return text
+    # Longest keys first so "John Smith" wins over a bare "John" inside it.
+    pattern = re.compile('|'.join(re.escape(k) for k in sorted(mapping, key=len, reverse=True)))
+    return pattern.sub(lambda m: mapping[m.group(0)], text)
+
+
+def pseudonymize_text(text, org_id):
+    return _substitute(text, _fetch_org_mapping(org_id))
+
+
+def deanonymize_text(text, org_id):
+    return _substitute(text, _fetch_org_mapping_reverse(org_id))
