@@ -243,3 +243,22 @@ def test_reverse_cache_reflects_forward_refresh_without_waiting_out_own_ttl():
         result = pseudonymize.deanonymize_text('ORG_cd34 employs PERSON_ab12.', 'org-1')
 
     assert result == 'Acme Corp employs Jane Doe.'
+
+
+def test_redact_image_calls_presidio_image_redactor(monkeypatch):
+    fake_supabase = _mock_supabase_table({'orgs': [{'pseudonymize_entities': ['PERSON']}]})
+    fake_redacted_bytes = b'redacted-png-bytes'
+
+    class FakeRedactor:
+        def redact(self, image, entities=None):
+            return image  # PIL Image passthrough for this test
+
+    with patch('pseudonymize.app.supabase_admin', fake_supabase), \
+         patch('pseudonymize._get_image_redactor', return_value=FakeRedactor()), \
+         patch('pseudonymize._png_bytes_to_pil_image') as mock_to_pil, \
+         patch('pseudonymize._pil_image_to_png_bytes', return_value=fake_redacted_bytes) as mock_to_bytes:
+        result = pseudonymize.redact_image(b'original-png-bytes', 'org-1')
+
+    mock_to_pil.assert_called_once_with(b'original-png-bytes')
+    mock_to_bytes.assert_called_once()
+    assert result == fake_redacted_bytes

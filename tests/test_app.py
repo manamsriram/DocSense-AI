@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
 from functools import wraps
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 
 
 # ---- Helpers ----
@@ -712,13 +712,16 @@ def test_extract_page_figures_vision_fallback_for_captionless():
     # no caption text anywhere on the page
 
     from app import extract_page_figures
-    with patch('app.describe_image_with_groq', return_value='Scatter plot of test data.') as mock_vis:
+    with patch('app.describe_image_with_groq', return_value='Scatter plot of test data.') as mock_vis, \
+         patch('app.pseudonymize.redact_image', side_effect=lambda png_bytes, org_id: png_bytes) as mock_redact:
         budget = {'remaining': 2}
-        figures, _ = extract_page_figures(page, vision_budget=budget)
+        figures, _ = extract_page_figures(page, vision_budget=budget, org_id='org-1')
         assert len(figures) == 1
         assert figures[0][0] == 'Scatter plot of test data.'
         assert budget['remaining'] == 1
         mock_vis.assert_called_once()
+        mock_redact.assert_called_once()
+        assert mock_redact.call_args.args[1] == 'org-1'
     doc.close()
 
 
@@ -981,6 +984,41 @@ def test_index_pdf_flushes_normally_when_no_entities_detected(tmp_path):
     assert result > 0
     assert len(calls) > 0  # detect_and_register_entities was still called per chunk
     mock_qdrant.upsert.assert_called_once()
+
+
+def test_index_pdf_redacts_scanned_page_image_before_groq_vision_call(tmp_path):
+    """A page with no text layer (scanned page) goes through the Groq vision
+    transcription fallback -- the image handed to Groq must be the
+    pseudonymize.redact_image() output, not the raw page render."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "scanned.pdf"
+    doc = pymupdf.open()
+    doc.new_page()  # blank page: no text layer -> scanned-page vision fallback
+    doc.save(str(pdf_path))
+    doc.close()
+
+    redact_calls = []
+
+    def fake_redact(png_bytes, org_id):
+        redact_calls.append((png_bytes, org_id))
+        return b'redacted-scanned-bytes'
+
+    with patch('app.get_or_create_org_for_user', return_value='org-scanned-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('app.pseudonymize.redact_image', side_effect=fake_redact), \
+         patch('app.describe_image_with_groq', return_value='Transcribed scanned text.') as mock_vis, \
+         patch('pseudonymize.detect_and_register_entities'):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'scanned-test-user', display_name='scanned.pdf')
+
+    assert result > 0
+    assert len(redact_calls) == 1
+    assert redact_calls[0][1] == 'org-scanned-test'
+    mock_vis.assert_called_once_with(b'redacted-scanned-bytes', ANY, max_tokens=1500)
 
 
 # ---- Item A-Graph: incremental in-memory graph patching ----

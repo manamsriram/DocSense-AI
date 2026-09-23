@@ -612,7 +612,7 @@ def _find_caption(blocks, img_rect):
     return candidates[0][2], candidates[0][3]
 
 
-def extract_page_figures(page, vision_budget=None):
+def extract_page_figures(page, vision_budget=None, org_id=None):
     """Returns ([(caption, png_bytes)], excluded_bboxes) for page images worth indexing.
 
     Captions come from nearby text when available; otherwise a Groq vision
@@ -622,6 +622,10 @@ def extract_page_figures(page, vision_budget=None):
     generic prose splitter doesn't also emit that same caption as a bare
     duplicate chunk (harmless corpus bloat, not a data-loss bug like tables'
     caption/body split, but still worth avoiding).
+
+    The returned png_bytes are always the original, unredacted render (used
+    for storage/display); only the copy handed to the Groq vision call is
+    pseudonymized.
     """
     try:
         infos = page.get_image_info()
@@ -651,7 +655,8 @@ def extract_page_figures(page, vision_budget=None):
         if found:
             excluded_bboxes.append(found[1])
         if not caption and vision_budget and vision_budget['remaining'] > 0:
-            caption = describe_image_with_groq(png_bytes, _FIGURE_CAPTION_PROMPT)
+            redacted_bytes = pseudonymize.redact_image(png_bytes, org_id)
+            caption = describe_image_with_groq(redacted_bytes, _FIGURE_CAPTION_PROMPT)
             if caption:
                 vision_budget['remaining'] -= 1
         if not caption:
@@ -776,7 +781,7 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
 
         tabs = _detect_tables(page)
         table_chunks, table_excluded_bboxes = extract_page_tables(page, tabs=tabs)
-        figures, figure_excluded_bboxes = extract_page_figures(page, vision_budget=vision_budget)
+        figures, figure_excluded_bboxes = extract_page_figures(page, vision_budget=vision_budget, org_id=org_id)
         excluded_bboxes = table_excluded_bboxes + figure_excluded_bboxes
         raw_text = _page_text_excluding_tables(page, excluded_bboxes) if excluded_bboxes else page.get_text('text')
         page_text = preprocess(raw_text)
@@ -788,8 +793,9 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
             # No text layer — likely a scanned page; transcribe via Groq vision
             try:
                 pix = page.get_pixmap(dpi=SCANNED_PAGE_RENDER_DPI)
+                redacted_bytes = pseudonymize.redact_image(pix.tobytes('png'), org_id)
                 page_text = describe_image_with_groq(
-                    pix.tobytes('png'), _SCANNED_PAGE_PROMPT, max_tokens=1500
+                    redacted_bytes, _SCANNED_PAGE_PROMPT, max_tokens=1500
                 )
             except Exception as e:
                 logging.warning(f"Scanned-page render failed on page {pno}: {e}")

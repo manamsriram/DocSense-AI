@@ -197,3 +197,37 @@ def deanonymize_text(text, org_id):
         cached = _reverse_mapping_cache.get(org_id)
         pattern = cached[2] if cached else None
     return _substitute(text, reverse_mapping, pattern)
+
+
+_image_redactor = None
+
+
+def _get_image_redactor():
+    global _image_redactor
+    if _image_redactor is None:
+        from presidio_image_redactor import ImageRedactorEngine
+        _image_redactor = ImageRedactorEngine()
+    return _image_redactor
+
+
+def _png_bytes_to_pil_image(png_bytes):
+    from io import BytesIO
+    from PIL import Image
+    return Image.open(BytesIO(png_bytes))
+
+
+def _pil_image_to_png_bytes(image):
+    from io import BytesIO
+    buf = BytesIO()
+    image.save(buf, format='PNG')
+    return buf.getvalue()
+
+
+def redact_image(png_bytes, org_id):
+    """Box out detected entities in a page/figure image before it's sent
+    to a vision LLM. Ingestion-time only (GH Actions runner) -- never
+    called on the query path."""
+    image = _png_bytes_to_pil_image(png_bytes)
+    entity_types = get_org_entity_types(org_id)
+    redacted = _get_image_redactor().redact(image, entities=entity_types)
+    return _pil_image_to_png_bytes(redacted)
