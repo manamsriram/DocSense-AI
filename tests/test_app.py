@@ -1205,6 +1205,68 @@ def test_extract_and_store_graph_sends_pseudonymized_text_to_openrouter():
     assert 'Jane Doe' not in captured['prompt']
 
 
+def test_extract_and_store_graph_deanonymizes_extracted_entity_names_before_storage():
+    """LLMs often echo input tokens verbatim: if the OpenRouter response contains
+    a pseudonym token (because it saw pseudonymized chunk text), the graph must
+    still end up storing the real value -- the retrieval pipeline downstream
+    reads graph_nodes/graph_edges and must never see pseudonyms."""
+    from app import extract_and_store_graph
+    import json as json_module
+
+    llm_response = json_module.dumps([{
+        'chunk_index': 0,
+        'entities': [{'name': 'PERSON_ab12', 'type': 'person', 'aliases': ['PERSON_ab12']}],
+        'triples': [{'subject': 'PERSON_ab12', 'relation': 'employs', 'object': 'ORG_cd34'}],
+    }])
+
+    def fake_deanonymize(text, org_id):
+        return (
+            text.replace('PERSON_ab12', 'Jane Doe')
+                .replace('ORG_cd34', 'Acme Corp')
+        )
+
+    mock_supabase = _graph_supabase_mock_nodes_edges([], [])
+    upserted = {}
+    inserted_edges = {}
+
+    def capture_upsert(rows, on_conflict=None):
+        upserted['rows'] = rows
+        upserted['on_conflict'] = on_conflict
+        result = MagicMock()
+        result.execute.return_value = MagicMock(data=[])
+        return result
+
+    def capture_insert(rows):
+        inserted_edges['rows'] = rows
+        result = MagicMock()
+        result.execute.return_value = MagicMock(data=[])
+        return result
+
+    mock_supabase.table.side_effect = (
+        lambda name: MagicMock(
+            select=MagicMock(return_value=MagicMock(
+                eq=MagicMock(return_value=MagicMock(
+                    execute=MagicMock(return_value=MagicMock(data=[]))
+                ))
+            )),
+            upsert=capture_upsert,
+        ) if name == 'graph_nodes' else MagicMock(insert=capture_insert)
+    )
+
+    with patch('app.supabase_admin', mock_supabase), \
+         patch('app.get_or_create_org_for_user', return_value='org-deanon-1'), \
+         patch('app._call_openrouter_helper', return_value=llm_response), \
+         patch('pseudonymize.deanonymize_text', side_effect=fake_deanonymize):
+        extract_and_store_graph([('c1', 1, 'Jane Doe employs Acme Corp.')], 'user-deanon-1', 'doc.pdf')
+
+    assert upserted['rows'][0]['entity_name'] == 'jane doe'
+    assert upserted['rows'][0]['aliases'] == ['jane doe']
+    assert inserted_edges['rows'][0]['source_entity'] == 'jane doe'
+    assert inserted_edges['rows'][0]['target_entity'] == 'acme corp'
+    assert 'person_ab12' not in upserted['rows'][0]['entity_name']
+    assert 'org_cd34' not in inserted_edges['rows'][0]['target_entity']
+
+
 # ---- Item C: alias-based entity linking ----
 
 def test_build_graph_from_supabase_loads_aliases_onto_nodes():

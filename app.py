@@ -1055,10 +1055,18 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
         chunk_id, page_num, _ = batch_chunks[idx]
 
         for ent in item.get('entities', []):
-            name = ent.get('name', '').strip().lower()
+            # The LLM saw pseudonymized chunk text and may echo pseudonym
+            # tokens verbatim (e.g. "PERSON_ab12") back as entity names —
+            # deanonymize before lowercasing (pseudonym tokens are matched
+            # case-sensitively) so the graph stores real values only, same
+            # as it would without pseudonymization.
+            name = pseudonymize.deanonymize_text(ent.get('name', ''), org_id).strip().lower()
             if not name:
                 continue
-            aliases = {a.strip().lower() for a in ent.get('aliases', []) if a and a.strip()}
+            aliases = {
+                pseudonymize.deanonymize_text(a, org_id).strip().lower()
+                for a in ent.get('aliases', []) if a and a.strip()
+            }
             if name not in nodes_to_upsert:
                 nodes_to_upsert[name] = {
                     'entity_type': ent.get('type'),
@@ -1068,9 +1076,9 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
                 nodes_to_upsert[name]['aliases'] |= aliases
 
         for triple in item.get('triples', []):
-            subj = triple.get('subject', '').strip().lower()
+            subj = pseudonymize.deanonymize_text(triple.get('subject', ''), org_id).strip().lower()
             rel  = triple.get('relation', '').strip().lower()
-            obj  = triple.get('object', '').strip().lower()
+            obj  = pseudonymize.deanonymize_text(triple.get('object', ''), org_id).strip().lower()
             if not (subj and rel and obj):
                 continue
             edges_to_insert.append({
