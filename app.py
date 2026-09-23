@@ -655,8 +655,12 @@ def extract_page_figures(page, vision_budget=None, org_id=None):
         if found:
             excluded_bboxes.append(found[1])
         if not caption and vision_budget and vision_budget['remaining'] > 0:
-            redacted_bytes = pseudonymize.redact_image(png_bytes, org_id)
-            caption = describe_image_with_groq(redacted_bytes, _FIGURE_CAPTION_PROMPT)
+            try:
+                redacted_bytes = pseudonymize.redact_image(png_bytes, org_id)
+                caption = describe_image_with_groq(redacted_bytes, _FIGURE_CAPTION_PROMPT)
+            except Exception as e:
+                logging.warning(f"Figure caption vision fallback failed on page {page.number + 1}: {e}")
+                caption = None
             if caption:
                 vision_budget['remaining'] -= 1
         if not caption:

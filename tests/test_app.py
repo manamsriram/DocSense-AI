@@ -742,6 +742,30 @@ def test_extract_page_figures_captionless_skipped_without_budget():
     doc.close()
 
 
+def test_extract_page_figures_redact_failure_skips_figure_without_raising():
+    """redact_image can fail (OCR/Tesseract/presidio internal error) on a
+    single figure -- that must degrade to skipping this figure's vision
+    caption (same as describe_image_with_groq returning None), not raise
+    out of extract_page_figures and abort the whole page/document."""
+    import pymupdf
+    doc = pymupdf.open()
+    page = doc.new_page()
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 100, 100), False)
+    pix.set_rect(pix.irect, (80, 80, 200))
+    page.insert_image(pymupdf.Rect(72, 100, 192, 220), pixmap=pix)
+    # no caption text anywhere on the page
+
+    from app import extract_page_figures
+    with patch('app.pseudonymize.redact_image', side_effect=RuntimeError('tesseract not found')), \
+         patch('app.describe_image_with_groq') as mock_vis:
+        budget = {'remaining': 2}
+        figures, _ = extract_page_figures(page, vision_budget=budget, org_id='org-1')
+        assert figures == []          # no caption obtainable -> figure skipped
+        assert budget['remaining'] == 2  # budget untouched since caption never produced
+        mock_vis.assert_not_called()  # never reached because redact_image raised first
+    doc.close()
+
+
 # ---- Item E: configurable retrieval width ----
 
 def test_estimate_query_complexity_simple_question_gets_base_width():
@@ -1019,6 +1043,43 @@ def test_index_pdf_redacts_scanned_page_image_before_groq_vision_call(tmp_path):
     assert len(redact_calls) == 1
     assert redact_calls[0][1] == 'org-scanned-test'
     mock_vis.assert_called_once_with(b'redacted-scanned-bytes', ANY, max_tokens=1500)
+
+
+def test_index_pdf_continues_indexing_when_figure_redact_fails(tmp_path):
+    """redact_image failing for one captionless figure's vision-caption
+    fallback (OCR/Tesseract/presidio internal error) must not abort indexing
+    of the rest of the document -- mirrors
+    test_index_pdf_continues_indexing_when_entity_registration_fails for the
+    new redact_image call site."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc_with_figure.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "This page has some normal indexable text on it.")
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 100, 100), False)
+    pix.set_rect(pix.irect, (80, 80, 200))
+    # Placed far from the text and any caption so it gets no nearby-text caption.
+    page.insert_image(pymupdf.Rect(72, 400, 192, 520), pixmap=pix)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    with patch('app.get_or_create_org_for_user', return_value='org-figure-redact-fail-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('app.pseudonymize.redact_image', side_effect=RuntimeError('tesseract not found')), \
+         patch('app.describe_image_with_groq') as mock_vis, \
+         patch('pseudonymize.detect_and_register_entities'):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'figure-redact-fail-user', display_name='doc_with_figure.pdf')
+
+    # Document indexing completes -- the text chunk is still indexed even
+    # though the figure's vision caption fallback raised internally.
+    assert result > 0
+    mock_qdrant.upsert.assert_called()
+    mock_vis.assert_not_called()  # redact_image raised before describe_image_with_groq ran
 
 
 # ---- Item A-Graph: incremental in-memory graph patching ----
