@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
-RUN python -m spacy download en_core_web_sm --target=/install/lib/python3.11/site-packages
+RUN PYTHONPATH=/install/lib/python3.11/site-packages python -m spacy download en_core_web_sm --target=/install/lib/python3.11/site-packages
 
 # ---- Stage 2: runtime ----
 FROM python:3.11-slim
