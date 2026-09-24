@@ -33,6 +33,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from supabase import create_client, Client
 
 load_dotenv()
+import pseudonymize
+
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__, static_url_path='', static_folder='.')
@@ -60,7 +62,32 @@ ANSWER_MODEL = os.getenv('ANSWER_MODEL', 'google/gemini-2.5-flash')
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+# Free-tier Flash/Flash-Lite models to try in order when GEMINI_MODEL is
+# unavailable (429 quota exhaustion, 503 overload) — each model has its own
+# separate free-tier quota, so cycling through them survives one being down.
+_GEMINI_FALLBACK_CHAIN_DEFAULT = 'gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3-flash-preview,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash'
+GEMINI_MODEL_CHAIN = list(dict.fromkeys(
+    [GEMINI_MODEL] + [m.strip() for m in os.getenv('GEMINI_MODEL_CHAIN', _GEMINI_FALLBACK_CHAIN_DEFAULT).split(',') if m.strip()]
+))
 _gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+
+def _call_gemini_with_fallback(make_request):
+    """Try each model in GEMINI_MODEL_CHAIN in turn; returns text from the first
+    one that succeeds with non-empty content. make_request(model_name) must
+    return a genai response object with a `.text` attribute.
+    """
+    last_err = None
+    for model in GEMINI_MODEL_CHAIN:
+        try:
+            text = (make_request(model).text or '').strip()
+            if text:
+                return text
+            last_err = RuntimeError(f"gemini model {model} returned empty content")
+        except Exception as e:
+            last_err = e
+            logging.warning(f"[gemini] model {model} failed ({e}), trying next in chain")
+    raise last_err or RuntimeError("GEMINI_MODEL_CHAIN is empty")
 
 COLLECTION = 'documents'
 
@@ -611,7 +638,7 @@ def _find_caption(blocks, img_rect):
     return candidates[0][2], candidates[0][3]
 
 
-def extract_page_figures(page, vision_budget=None):
+def extract_page_figures(page, vision_budget=None, org_id=None):
     """Returns ([(caption, png_bytes)], excluded_bboxes) for page images worth indexing.
 
     Captions come from nearby text when available; otherwise a Groq vision
@@ -621,6 +648,10 @@ def extract_page_figures(page, vision_budget=None):
     generic prose splitter doesn't also emit that same caption as a bare
     duplicate chunk (harmless corpus bloat, not a data-loss bug like tables'
     caption/body split, but still worth avoiding).
+
+    The returned png_bytes are always the original, unredacted render (used
+    for storage/display); only the copy handed to the Groq vision call is
+    pseudonymized.
     """
     try:
         infos = page.get_image_info()
@@ -650,7 +681,19 @@ def extract_page_figures(page, vision_budget=None):
         if found:
             excluded_bboxes.append(found[1])
         if not caption and vision_budget and vision_budget['remaining'] > 0:
-            caption = describe_image_with_groq(png_bytes, _FIGURE_CAPTION_PROMPT)
+            # org_id defaults to None (some tests exercise the no-vision-
+            # budget path without it) but must be real before it's used to
+            # scope a redaction -- a None org_id would silently redact
+            # under get_org_entity_types(None)'s DEFAULT_ENTITY_TYPES
+            # fallback instead of the org's actual config. Fail loud here
+            # rather than the caller quietly getting worse redaction.
+            assert org_id is not None, "extract_page_figures: org_id is required once a vision call is reachable"
+            try:
+                redacted_bytes = pseudonymize.redact_image(png_bytes, org_id)
+                caption = describe_image_with_groq(redacted_bytes, _FIGURE_CAPTION_PROMPT)
+            except Exception as e:
+                logging.warning(f"Figure caption vision fallback failed on page {page.number + 1}: {e}")
+                caption = None
             if caption:
                 vision_budget['remaining'] -= 1
         if not caption:
@@ -733,11 +776,35 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
     embed_texts = []
     graph_eligible = []   # (point_id, page_num, display_text) across all flushes, for graph pass below
     total_indexed = 0
+    dropped_count = 0   # chunks dropped fail-closed on pseudonymization failure -- see flush()
     counts = {'text': 0, 'table': 0, 'figure': 0, 'scanned': 0}
     vision_budget = {'remaining': MAX_VISION_CALLS_PER_DOC}
 
     def flush():
-        nonlocal points, embed_texts, total_indexed
+        nonlocal points, embed_texts, total_indexed, dropped_count
+        if not points:
+            return
+        # Fail closed: a chunk whose PII entities failed to register would
+        # never get substituted by pseudonymize_text on any later LLM call
+        # (grading, synthesis, graph extraction), silently leaking its raw
+        # PII to a third-party provider. Drop the chunk entirely rather
+        # than index it half-protected. dropped_count is surfaced by the
+        # caller (see below) so a systemically broken pseudonymization
+        # pipeline (bad PSEUDONYM_SECRET, missing spaCy model, blocked
+        # Supabase writes, ...) shows up as a visible signal instead of
+        # only individual per-chunk error log lines.
+        ok_points, ok_embed_texts = [], []
+        for point, embed_text in zip(points, embed_texts):
+            _, _, display_text, _ = point
+            try:
+                pseudonymize.detect_and_register_entities(display_text, org_id)
+            except Exception as e:
+                dropped_count += 1
+                logging.error(f"[pseudonymize] entity registration failed for org {org_id}, skipping chunk (fail-closed): {e}")
+                continue
+            ok_points.append(point)
+            ok_embed_texts.append(embed_text)
+        points, embed_texts = ok_points, ok_embed_texts
         if not points:
             return
         vecs = list(get_embedding_model().embed(embed_texts))
@@ -770,7 +837,7 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
 
         tabs = _detect_tables(page)
         table_chunks, table_excluded_bboxes = extract_page_tables(page, tabs=tabs)
-        figures, figure_excluded_bboxes = extract_page_figures(page, vision_budget=vision_budget)
+        figures, figure_excluded_bboxes = extract_page_figures(page, vision_budget=vision_budget, org_id=org_id)
         excluded_bboxes = table_excluded_bboxes + figure_excluded_bboxes
         raw_text = _page_text_excluding_tables(page, excluded_bboxes) if excluded_bboxes else page.get_text('text')
         page_text = preprocess(raw_text)
@@ -782,8 +849,9 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
             # No text layer — likely a scanned page; transcribe via Groq vision
             try:
                 pix = page.get_pixmap(dpi=SCANNED_PAGE_RENDER_DPI)
+                redacted_bytes = pseudonymize.redact_image(pix.tobytes('png'), org_id)
                 page_text = describe_image_with_groq(
-                    pix.tobytes('png'), _SCANNED_PAGE_PROMPT, max_tokens=1500
+                    redacted_bytes, _SCANNED_PAGE_PROMPT, max_tokens=1500
                 )
             except Exception as e:
                 logging.warning(f"Scanned-page render failed on page {pno}: {e}")
@@ -827,6 +895,18 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
 
     doc.close()
     flush()
+
+    if dropped_count:
+        # Aggregate signal distinct from flush()'s per-chunk error lines --
+        # lets an operator/alerting pipeline tell "this doc legitimately had
+        # no extractable text" apart from "the pseudonymization pipeline is
+        # systemically broken and has been dropping every chunk." Logged
+        # even when total_indexed == 0 (previously the early return below
+        # skipped ALL logging in that case, including this one).
+        logging.error(
+            f"[pseudonymize] {dropped_count}/{dropped_count + total_indexed} chunks dropped "
+            f"for {filename} (user {user_id[:8]}...) due to entity-registration failures"
+        )
 
     if total_indexed == 0:
         return 0
@@ -1024,9 +1104,21 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
     members) while user_id is kept for provenance/ownership only.
     """
     org_id = get_or_create_org_for_user(user_id)
-    formatted = '\n\n'.join(
-        f'[{i}] {text[:600]}' for i, (_, _, text) in enumerate(batch_chunks)
-    )
+    try:
+        # pseudonymize_text can hit Supabase (mapping fetch) -- keep this
+        # inside the batch's own try/except (fail closed: skip graph
+        # extraction for this batch entirely on failure) rather than
+        # letting it raise uncaught, which would propagate out of
+        # index_pdf AFTER that document's Qdrant upserts already
+        # succeeded, leaving it "failed but actually partially indexed".
+        # Never fall back to sending raw, unpseudonymized text.
+        formatted = '\n\n'.join(
+            f'[{i}] {pseudonymize.pseudonymize_text(text, org_id)[:600]}'
+            for i, (_, _, text) in enumerate(batch_chunks)
+        )
+    except Exception as e:
+        logging.error(f"[graph] pseudonymize_text failed for batch in {source_doc}, skipping graph extraction (fail-closed): {e}")
+        return
     try:
         raw = _call_openrouter_helper(
             _GRAPH_EXTRACT_PROMPT.format(chunks=formatted), max_tokens=700
@@ -1041,41 +1133,60 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
     nodes_to_upsert = {}
     edges_to_insert = []
 
-    for item in results:
-        idx = item.get('chunk_index', 0)
-        if idx >= len(batch_chunks):
-            continue
-        chunk_id, page_num, _ = batch_chunks[idx]
-
-        for ent in item.get('entities', []):
-            name = ent.get('name', '').strip().lower()
-            if not name:
+    try:
+        for item in results:
+            idx = item.get('chunk_index', 0)
+            if idx >= len(batch_chunks):
                 continue
-            aliases = {a.strip().lower() for a in ent.get('aliases', []) if a and a.strip()}
-            if name not in nodes_to_upsert:
-                nodes_to_upsert[name] = {
-                    'entity_type': ent.get('type'),
-                    'aliases': aliases,
+            chunk_id, page_num, _ = batch_chunks[idx]
+
+            for ent in item.get('entities', []):
+                # The LLM saw pseudonymized chunk text and may echo pseudonym
+                # tokens back as entity names -- per _GRAPH_EXTRACT_PROMPT's
+                # "normalize to canonical lowercase" instruction, usually
+                # lowercased (e.g. "person_ab12" for stored "PERSON_ab12").
+                # deanonymize_text matches case-insensitively (see
+                # pseudonymize._compile_pattern) but always substitutes the
+                # canonical stored real value, so the graph stores real values
+                # only, same as it would without pseudonymization.
+                name = pseudonymize.deanonymize_text(ent.get('name', ''), org_id).strip().lower()
+                if not name:
+                    continue
+                aliases = {
+                    pseudonymize.deanonymize_text(a, org_id).strip().lower()
+                    for a in ent.get('aliases', []) if a and a.strip()
                 }
-            else:
-                nodes_to_upsert[name]['aliases'] |= aliases
+                if name not in nodes_to_upsert:
+                    nodes_to_upsert[name] = {
+                        'entity_type': ent.get('type'),
+                        'aliases': aliases,
+                    }
+                else:
+                    nodes_to_upsert[name]['aliases'] |= aliases
 
-        for triple in item.get('triples', []):
-            subj = triple.get('subject', '').strip().lower()
-            rel  = triple.get('relation', '').strip().lower()
-            obj  = triple.get('object', '').strip().lower()
-            if not (subj and rel and obj):
-                continue
-            edges_to_insert.append({
-                'user_id': user_id,
-                'org_id': org_id,
-                'source_entity': subj,
-                'relation': rel,
-                'target_entity': obj,
-                'chunk_id': chunk_id,
-                'source_doc': source_doc,
-                'page_num': page_num,
-            })
+            for triple in item.get('triples', []):
+                subj = pseudonymize.deanonymize_text(triple.get('subject', ''), org_id).strip().lower()
+                rel  = triple.get('relation', '').strip().lower()
+                obj  = pseudonymize.deanonymize_text(triple.get('object', ''), org_id).strip().lower()
+                if not (subj and rel and obj):
+                    continue
+                edges_to_insert.append({
+                    'user_id': user_id,
+                    'org_id': org_id,
+                    'source_entity': subj,
+                    'relation': rel,
+                    'target_entity': obj,
+                    'chunk_id': chunk_id,
+                    'source_doc': source_doc,
+                    'page_num': page_num,
+                })
+    except Exception as e:
+        # deanonymize_text can hit Supabase (reverse mapping fetch) -- fail
+        # closed here too: skip graph persistence entirely for this batch
+        # rather than let a mid-loop failure propagate out of index_pdf
+        # after that document's Qdrant upserts already succeeded.
+        logging.error(f"[graph] deanonymize_text failed for batch in {source_doc}, skipping graph persistence (fail-closed): {e}")
+        return
 
     if nodes_to_upsert:
         try:
@@ -1594,8 +1705,9 @@ def _call_groq_helper(user_content, max_tokens, temperature=0.0, model=None):
         logging.warning(f"Groq helper failed ({e}), trying Gemini")
     if not _gemini_client:
         raise RuntimeError("Groq failed and no GEMINI_API_KEY configured")
-    resp = _gemini_client.models.generate_content(model=GEMINI_MODEL, contents=user_content)
-    return resp.text.strip()
+    return _call_gemini_with_fallback(
+        lambda model: _gemini_client.models.generate_content(model=model, contents=user_content)
+    )
 
 
 def decompose_query(question):
@@ -1727,17 +1839,16 @@ def generate_text(prompt, conversation_history=None):
         for turn in (conversation_history or []):
             history.append(genai_types.Content(role='user', parts=[genai_types.Part(text=turn['question'])]))
             history.append(genai_types.Content(role='model', parts=[genai_types.Part(text=turn['answer'])]))
-        chat = _gemini_client.chats.create(
-            model=GEMINI_MODEL,
-            history=history,
-            config=genai_types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
-        )
-        response = chat.send_message(prompt)
-        content = response.text.strip()
-        if not content:
-            logging.warning(f"[eval] gemini_empty_content=true model={GEMINI_MODEL}")
-            return None
-        return content
+
+        def make_request(model):
+            chat = _gemini_client.chats.create(
+                model=model,
+                history=history,
+                config=genai_types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
+            )
+            return chat.send_message(prompt)
+
+        return _call_gemini_with_fallback(make_request)
     except Exception as e:
         logging.error(f"Gemini fallback also failed: {e}", exc_info=True)
         return None
@@ -1747,11 +1858,15 @@ _SOURCE_RE = re.compile(r'^\[Page (\d+), Source: ([^\]]+)\]\s*(.*)', re.DOTALL)
 _FIGURE_MARKER_RE = re.compile(r'\[Figure: ([^\]]+)\]\s*')
 
 
-def build_source(score, text):
+def build_source(score, text, org_id):
     """Parse a display chunk into a source dict. Returns (source, prompt_text).
 
     Figure chunks carry their storage path in a [Figure: path] marker; it is
     surfaced as image_path and stripped from the text sent to the LLM.
+
+    source['text'] is always the raw value (citations shown to the user must
+    stay real). prompt_text is pseudonymized -- it's the only copy of this
+    chunk that reaches an LLM.
     """
     m_fig = _FIGURE_MARKER_RE.search(text)
     clean = _FIGURE_MARKER_RE.sub('', text)
@@ -1767,11 +1882,39 @@ def build_source(score, text):
         source = {'page': 0, 'source': 'unknown', 'text': clean, 'score': round(score, 4)}
     if m_fig:
         source['image_path'] = m_fig.group(1)
-    return source, clean
+    return source, pseudonymize.pseudonymize_text(clean, org_id)
+
+
+def _pseudonymize_conversation_history(conversation_history, org_id):
+    """Return a pseudonymized copy of conversation_history for the LLM call.
+
+    generate_text() puts each turn's question/answer directly into the
+    provider messages -- a raw conversation_history would leak real PII
+    from prior turns even when the current prompt is pseudonymized. This
+    copy is only for the LLM call; callers must keep using the raw
+    conversation_history for query_history storage and anything shown in
+    the UI.
+    """
+    if not conversation_history:
+        return conversation_history
+    return [
+        {
+            **turn,
+            'question': pseudonymize.pseudonymize_text(turn['question'], org_id),
+            'answer': pseudonymize.pseudonymize_text(turn['answer'], org_id),
+        }
+        for turn in conversation_history
+    ]
 
 
 def ask_file(question, user_id, conversation_history=None):
     """Return (response_text, sources) for a specific user's documents."""
+    org_id = get_or_create_org_for_user(user_id)
+    # The question was never ingested, so pseudonymize_text alone would
+    # leave any PII typed directly into it unchanged -- register structured
+    # PII in it first. See detect_and_register_query_entities for scope
+    # (regex-only, no PERSON/LOCATION).
+    pseudonymize.detect_and_register_query_entities(question, org_id)
     complexity = estimate_query_complexity(question)
     scored_chunks = find_relevant_chunks(question, user_id, top_n=complexity['top_n'], top_k=complexity['top_k'])
     if not scored_chunks:
@@ -1784,25 +1927,50 @@ def ask_file(question, user_id, conversation_history=None):
         "If the answer is not in the excerpts, say so.\n\n"
     )
     for score, text in scored_chunks:
-        source, prompt_text = build_source(score, text)
+        source, prompt_text = build_source(score, text, org_id)
         prompt += f"{prompt_text}\n\n"
         sources.append(source)
 
-    prompt += f"Question: {question}\nAnswer:"
-    response = generate_text(prompt, conversation_history=conversation_history)
+    prompt += f"Question: {pseudonymize.pseudonymize_text(question, org_id)}\nAnswer:"
+    pseudo_history = _pseudonymize_conversation_history(conversation_history, org_id)
+    response = generate_text(prompt, conversation_history=pseudo_history)
     if response is None:
         return None, []
-    return response, sources
+    return pseudonymize.deanonymize_text(response, org_id), sources
 
 
 def ask_file_agentic(question, user_id, conversation_history=None):
-    """Agentic RAG: query decomp + CRAG loop + synthesis. Falls back to ask_file() on error."""
+    """Agentic RAG: query decomp + CRAG loop + synthesis. Falls back to ask_file() on error.
+
+    Raw chunk/question text never reaches an LLM call on this path -- only
+    pseudonymized copies are sent to decompose_query/grade_chunks/
+    reformulate_query/generate_text. Retrieval (find_relevant_chunks_with_graph)
+    keeps consuming raw text throughout, since it's not an LLM call and must
+    not change behavior. The final answer is deanonymized before it's returned.
+    """
     t_total = time.perf_counter()
     try:
         if get_collection_count(user_id) == 0:
             return "No documents have been indexed yet. Please upload a PDF first.", []
 
-        sub_queries = _timed("decompose_query", decompose_query, question)
+        org_id = get_or_create_org_for_user(user_id)
+        # The question was never ingested, so pseudonymize_text alone would
+        # leave any PII typed directly into it unchanged -- register
+        # structured PII in it first (see ask_file's identical call).
+        pseudonymize.detect_and_register_query_entities(question, org_id)
+        pseudo_question = pseudonymize.pseudonymize_text(question, org_id)
+
+        sub_queries_pseudo = _timed("decompose_query", decompose_query, pseudo_question)
+        if sub_queries_pseudo == [pseudo_question]:
+            # Short-question fast path (see decompose_query's <=10-word heuristic):
+            # no LLM call was made, so sub_queries_pseudo is just the identity
+            # wrapper around pseudo_question. Skip the deanonymize round-trip
+            # and use the original raw question directly -- avoids an
+            # unnecessary lossy pseudonymize/deanonymize pass on the common
+            # short-question path.
+            sub_queries = [question]
+        else:
+            sub_queries = [pseudonymize.deanonymize_text(sq, org_id) for sq in sub_queries_pseudo]
         logging.info(f"[agentic] decomposed into {len(sub_queries)} sub-queries: {sub_queries}")
         complexity = estimate_query_complexity(question, sub_query_count=len(sub_queries))
 
@@ -1830,8 +1998,24 @@ def ask_file_agentic(question, user_id, conversation_history=None):
                     break
 
                 texts = [text for _, text in scored]
+                pseudo_texts = [pseudonymize.pseudonymize_text(t, org_id) for t in texts]
+                pseudo_sub_q = pseudonymize.pseudonymize_text(sub_q, org_id)
                 try:
-                    relevant, _ = _timed(f"grade_chunks_iter{iteration}", grade_chunks, sub_q, texts)
+                    relevant_pseudo, _ = _timed(f"grade_chunks_iter{iteration}", grade_chunks, pseudo_sub_q, pseudo_texts)
+                    # grade_chunks returns a subset of its input list by value;
+                    # map back to the matching raw texts by position.
+                    try:
+                        relevant = [texts[pseudo_texts.index(pt)] for pt in relevant_pseudo]
+                    except ValueError:
+                        # A genuine chunk-mapping bug (grading echoed back a
+                        # chunk that doesn't byte-for-byte match any input),
+                        # not a provider/network failure -- give it its own
+                        # log line rather than letting the outer catch-all
+                        # below silently attribute it to "pipeline error,
+                        # falling back to ask_file" alongside real provider
+                        # outages, which would hide a reproducible bug.
+                        logging.warning(f"[agentic] grade_chunks returned a chunk not present in its input for '{sub_q}', using retrieved chunks as-is")
+                        relevant = texts
                 except GradingUnavailableError:
                     logging.warning(f"[agentic] grading unavailable, using retrieved chunks as-is for '{sub_q}'")
                     relevant = texts
@@ -1841,7 +2025,11 @@ def ask_file_agentic(question, user_id, conversation_history=None):
                     break
 
                 logging.info(f"[agentic] no relevant chunks for '{retrieval_query}' (iter {iteration}), reformulating")
-                retrieval_query = _timed("reformulate_query", reformulate_query, retrieval_query)
+                pseudo_reformulated = _timed(
+                    "reformulate_query", reformulate_query,
+                    pseudonymize.pseudonymize_text(retrieval_query, org_id),
+                )
+                retrieval_query = pseudonymize.deanonymize_text(pseudo_reformulated, org_id)
                 iter_top_k = int(iter_top_k * 1.5)
                 reformulation_count += 1
 
@@ -1863,20 +2051,27 @@ def ask_file_agentic(question, user_id, conversation_history=None):
             "If the answer is not in the excerpts, say so.\n\n"
         )
         for score, text in sorted(all_chunks, key=lambda x: x[0], reverse=True)[:complexity['synthesis_top_n']]:
-            source, prompt_text = build_source(score, text)
+            source, prompt_text = build_source(score, text, org_id)
             prompt += f"{prompt_text}\n\n"
             sources.append(source)
 
-        prompt += f"Question: {question}\nAnswer:"
-        response = _timed("generate_text", generate_text, prompt, conversation_history=conversation_history)
+        prompt += f"Question: {pseudo_question}\nAnswer:"
+        pseudo_history = _pseudonymize_conversation_history(conversation_history, org_id)
+        response = _timed("generate_text", generate_text, prompt, conversation_history=pseudo_history)
         if response is None:
             return None, []
 
+        response = pseudonymize.deanonymize_text(response, org_id)
         logging.info(f"[perf] ask_file_agentic total: {(time.perf_counter() - t_total) * 1000:.1f}ms")
         return response, sources
 
     except Exception as e:
-        logging.error(f"[agentic] pipeline error, falling back to ask_file: {e}", exc_info=True)
+        # Deliberately broad (provider/network failures anywhere in this
+        # pipeline should fall back, not 500) -- but logging the exception
+        # TYPE, not just its message, keeps a real regression here
+        # (e.g. a bug in pseudonymize.py) distinguishable in logs from an
+        # ordinary Groq/OpenRouter timeout, both of which land here.
+        logging.error(f"[agentic] pipeline error ({type(e).__name__}), falling back to ask_file: {e}", exc_info=True)
         return ask_file(question, user_id, conversation_history=conversation_history)
 
 

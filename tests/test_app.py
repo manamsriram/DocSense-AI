@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pytest
 from functools import wraps
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 
 
 # ---- Helpers ----
@@ -320,6 +320,9 @@ def test_ask_multi_turn_skips_semantic_cache():
     chunk = (0.9, '[Page 1, Source: doc.pdf] Some context')
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain(data=prior_turns)), \
+         patch('app.get_or_create_org_for_user', return_value='org-multiturn-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['Can you elaborate?']), \
          patch('app.grade_chunks', return_value=([chunk[1]], [])), \
@@ -396,6 +399,9 @@ def test_ask_multi_turn_passes_history_to_llm():
     chunk = (0.9, '[Page 1, Source: doc.pdf] Some context')
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', _supabase_chain(data=prior_turns)), \
+         patch('app.get_or_create_org_for_user', return_value='org-multiturn-2'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['Can you elaborate?']), \
          patch('app.grade_chunks', return_value=([chunk[1]], [])), \
@@ -445,6 +451,9 @@ def test_ask_saves_session_id_to_history():
     chunk = (0.9, '[Page 1, Source: doc.pdf] Context')
     with patch('app.require_auth', _make_auth_decorator()), \
          patch('app.supabase_admin', supabase_mock), \
+         patch('app.get_or_create_org_for_user', return_value='org-session-1'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.get_collection_count', return_value=1), \
          patch('app.decompose_query', return_value=['What is Y?']), \
          patch('app.grade_chunks', return_value=([chunk[1]], [])), \
@@ -607,7 +616,8 @@ def test_find_caption_none_when_no_nearby_text():
 
 def test_build_source_plain_text_chunk():
     from app import build_source
-    source, prompt_text = build_source(0.9, '[Page 3, Source: report.pdf] Some excerpt text')
+    with patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t):
+        source, prompt_text = build_source(0.9, '[Page 3, Source: report.pdf] Some excerpt text', 'org-1')
     assert source['page'] == 3
     assert source['source'] == 'report.pdf'
     assert source['text'] == 'Some excerpt text'
@@ -618,7 +628,8 @@ def test_build_source_plain_text_chunk():
 def test_build_source_figure_chunk_extracts_image_path():
     from app import build_source
     text = '[Page 2, Source: report.pdf] [Figure: user1/figures/report.pdf/p2_f0.png] Figure 1: Revenue'
-    source, prompt_text = build_source(0.8, text)
+    with patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t):
+        source, prompt_text = build_source(0.8, text, 'org-1')
     assert source['image_path'] == 'user1/figures/report.pdf/p2_f0.png'
     assert source['text'] == 'Figure 1: Revenue'
     assert '[Figure:' not in prompt_text
@@ -626,9 +637,20 @@ def test_build_source_figure_chunk_extracts_image_path():
 
 def test_build_source_unparseable_falls_back():
     from app import build_source
-    source, _ = build_source(0.5, 'raw text without prefix')
+    with patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t):
+        source, _ = build_source(0.5, 'raw text without prefix', 'org-1')
     assert source['page'] == 0
     assert source['source'] == 'unknown'
+
+
+def test_build_source_keeps_citation_raw_but_pseudonymizes_prompt_text():
+    """source['text'] (shown to the user as a citation) must stay the real value;
+    prompt_text (the only copy that reaches an LLM) is the pseudonymized one."""
+    from app import build_source
+    with patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')):
+        source, prompt_text = build_source(0.9, '[Page 1, Source: doc.pdf] Jane Doe signed.', 'org-1')
+    assert source['text'] == 'Jane Doe signed.'
+    assert prompt_text == '[Page 1, Source: doc.pdf] PERSON_ab12 signed.'
 
 
 # ---- /figure-url tests ----
@@ -690,13 +712,16 @@ def test_extract_page_figures_vision_fallback_for_captionless():
     # no caption text anywhere on the page
 
     from app import extract_page_figures
-    with patch('app.describe_image_with_groq', return_value='Scatter plot of test data.') as mock_vis:
+    with patch('app.describe_image_with_groq', return_value='Scatter plot of test data.') as mock_vis, \
+         patch('app.pseudonymize.redact_image', side_effect=lambda png_bytes, org_id: png_bytes) as mock_redact:
         budget = {'remaining': 2}
-        figures, _ = extract_page_figures(page, vision_budget=budget)
+        figures, _ = extract_page_figures(page, vision_budget=budget, org_id='org-1')
         assert len(figures) == 1
         assert figures[0][0] == 'Scatter plot of test data.'
         assert budget['remaining'] == 1
         mock_vis.assert_called_once()
+        mock_redact.assert_called_once()
+        assert mock_redact.call_args.args[1] == 'org-1'
     doc.close()
 
 
@@ -714,6 +739,30 @@ def test_extract_page_figures_captionless_skipped_without_budget():
         assert extract_page_figures(page) == ([], [])
         assert extract_page_figures(page, vision_budget={'remaining': 0}) == ([], [])
         mock_vis.assert_not_called()
+    doc.close()
+
+
+def test_extract_page_figures_redact_failure_skips_figure_without_raising():
+    """redact_image can fail (OCR/Tesseract/presidio internal error) on a
+    single figure -- that must degrade to skipping this figure's vision
+    caption (same as describe_image_with_groq returning None), not raise
+    out of extract_page_figures and abort the whole page/document."""
+    import pymupdf
+    doc = pymupdf.open()
+    page = doc.new_page()
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 100, 100), False)
+    pix.set_rect(pix.irect, (80, 80, 200))
+    page.insert_image(pymupdf.Rect(72, 100, 192, 220), pixmap=pix)
+    # no caption text anywhere on the page
+
+    from app import extract_page_figures
+    with patch('app.pseudonymize.redact_image', side_effect=RuntimeError('tesseract not found')), \
+         patch('app.describe_image_with_groq') as mock_vis:
+        budget = {'remaining': 2}
+        figures, _ = extract_page_figures(page, vision_budget=budget, org_id='org-1')
+        assert figures == []          # no caption obtainable -> figure skipped
+        assert budget['remaining'] == 2  # budget untouched since caption never produced
+        mock_vis.assert_not_called()  # never reached because redact_image raised first
     doc.close()
 
 
@@ -870,6 +919,205 @@ def test_incremental_bm25_update_filters_qdrant_by_org_id():
     org_cond = next(c for c in scroll_filter.must if c.key == 'org_id')
     assert org_cond.match.value == 'org-bm25-filter-2'
     bm25_indices.pop('org-bm25-filter-2', None)
+
+
+# ---- Task 4: entity registration at ingestion ----
+
+def test_index_pdf_registers_entities_for_each_flushed_chunk(tmp_path):
+    """Every chunk flushed to Qdrant during index_pdf must also be run through
+    pseudonymize.detect_and_register_entities so query-time pseudonymization has
+    a mapping to substitute against. Qdrant payload shape is unaffected — this
+    only adds a call alongside the existing upsert."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Contact John Smith at john.smith@example.com for details.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    calls = []
+    with patch('app.get_or_create_org_for_user', return_value='org-entity-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('pseudonymize.detect_and_register_entities',
+               side_effect=lambda text, org_id: calls.append((text, org_id))):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'entity-test-user', display_name='doc.pdf')
+
+    assert result > 0
+    assert len(calls) > 0
+    assert all(org_id == 'org-entity-test' for _, org_id in calls)
+    assert any('John Smith' in text for text, _ in calls)
+
+
+def test_index_pdf_skips_chunk_when_entity_registration_fails(tmp_path):
+    """detect_and_register_entities populates the pseudonymization mapping
+    table that later LLM calls (grading, synthesis, graph extraction) rely
+    on to substitute PII out of a chunk's text. pseudonymize_text never
+    re-runs NER — it only substitutes entities already registered — so a
+    chunk whose registration failed would otherwise be indexed with its PII
+    permanently unprotected against every future LLM call on that chunk.
+    Fail closed: skip the chunk (and the whole document, if every chunk's
+    registration fails) rather than index it half-protected."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Contact Jane Doe at jane.doe@example.com for details.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    with patch('app.get_or_create_org_for_user', return_value='org-entity-fail-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('pseudonymize.detect_and_register_entities',
+               side_effect=RuntimeError('supabase unavailable')):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'entity-fail-test-user', display_name='doc.pdf')
+
+    assert result == 0
+    mock_qdrant.upsert.assert_not_called()
+
+
+def test_index_pdf_indexes_other_chunks_when_one_registration_fails(tmp_path):
+    """A registration failure on one page's chunk must not drop sibling
+    chunks from other pages that registered successfully — only the failing
+    chunk is excluded (points/embed_texts stay aligned after filtering)."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc.pdf"
+    doc = pymupdf.open()
+    page1 = doc.new_page()
+    page1.insert_text((72, 72), "Page one has no PII at all in it.")
+    page2 = doc.new_page()
+    page2.insert_text((72, 72), "Contact Jane Doe at jane.doe@example.com for details.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    def fail_on_page_two(text, org_id):
+        if 'Jane Doe' in text:
+            raise RuntimeError('supabase unavailable')
+
+    with patch('app.get_or_create_org_for_user', return_value='org-partial-fail-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('pseudonymize.detect_and_register_entities', side_effect=fail_on_page_two):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'partial-fail-test-user', display_name='doc.pdf')
+
+    assert result == 1
+    upserted_points = mock_qdrant.upsert.call_args.kwargs['points']
+    assert len(upserted_points) == 1
+    assert upserted_points[0].payload['page'] == 1
+
+
+def test_index_pdf_flushes_normally_when_no_entities_detected(tmp_path):
+    """A chunk with zero detected entities (detect_and_register_entities is a
+    no-op / registers nothing) must still flush/upsert like any other chunk."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "This page has no personal information in it at all.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    calls = []
+    with patch('app.get_or_create_org_for_user', return_value='org-no-entities-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('pseudonymize.detect_and_register_entities',
+               side_effect=lambda text, org_id: calls.append((text, org_id))):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'no-entities-test-user', display_name='doc.pdf')
+
+    assert result > 0
+    assert len(calls) > 0  # detect_and_register_entities was still called per chunk
+    mock_qdrant.upsert.assert_called_once()
+
+
+def test_index_pdf_redacts_scanned_page_image_before_groq_vision_call(tmp_path):
+    """A page with no text layer (scanned page) goes through the Groq vision
+    transcription fallback -- the image handed to Groq must be the
+    pseudonymize.redact_image() output, not the raw page render."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "scanned.pdf"
+    doc = pymupdf.open()
+    doc.new_page()  # blank page: no text layer -> scanned-page vision fallback
+    doc.save(str(pdf_path))
+    doc.close()
+
+    redact_calls = []
+
+    def fake_redact(png_bytes, org_id):
+        redact_calls.append((png_bytes, org_id))
+        return b'redacted-scanned-bytes'
+
+    with patch('app.get_or_create_org_for_user', return_value='org-scanned-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('app.pseudonymize.redact_image', side_effect=fake_redact), \
+         patch('app.describe_image_with_groq', return_value='Transcribed scanned text.') as mock_vis, \
+         patch('pseudonymize.detect_and_register_entities'):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'scanned-test-user', display_name='scanned.pdf')
+
+    assert result > 0
+    assert len(redact_calls) == 1
+    assert redact_calls[0][1] == 'org-scanned-test'
+    mock_vis.assert_called_once_with(b'redacted-scanned-bytes', ANY, max_tokens=1500)
+
+
+def test_index_pdf_continues_indexing_when_figure_redact_fails(tmp_path):
+    """redact_image failing for one captionless figure's vision-caption
+    fallback (OCR/Tesseract/presidio internal error) must not abort indexing
+    of the rest of the document -- mirrors
+    test_index_pdf_continues_indexing_when_entity_registration_fails for the
+    new redact_image call site."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc_with_figure.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "This page has some normal indexable text on it.")
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 100, 100), False)
+    pix.set_rect(pix.irect, (80, 80, 200))
+    # Placed far from the text and any caption so it gets no nearby-text caption.
+    page.insert_image(pymupdf.Rect(72, 400, 192, 520), pixmap=pix)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    with patch('app.get_or_create_org_for_user', return_value='org-figure-redact-fail-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('app.pseudonymize.redact_image', side_effect=RuntimeError('tesseract not found')), \
+         patch('app.describe_image_with_groq') as mock_vis, \
+         patch('pseudonymize.detect_and_register_entities'):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'figure-redact-fail-user', display_name='doc_with_figure.pdf')
+
+    # Document indexing completes -- the text chunk is still indexed even
+    # though the figure's vision caption fallback raised internally.
+    assert result > 0
+    mock_qdrant.upsert.assert_called()
+    mock_vis.assert_not_called()  # redact_image raised before describe_image_with_groq ran
 
 
 # ---- Item A-Graph: incremental in-memory graph patching ----
@@ -1096,6 +1344,148 @@ def test_extract_and_store_graph_writes_org_id_and_upserts_org_scoped():
     assert inserted_edges['rows'][0]['user_id'] == 'user-extract-1'
 
 
+def test_extract_and_store_graph_sends_pseudonymized_text_to_openrouter():
+    """Raw chunk text must never reach the OpenRouter graph-extraction call —
+    it has to be pseudonymized first, same as every other third-party LLM call."""
+    from app import extract_and_store_graph
+
+    captured = {}
+
+    def fake_openrouter_helper(user_content, max_tokens):
+        captured['prompt'] = user_content
+        return '[]'  # no entities, simplest valid response
+
+    with patch('app._call_openrouter_helper', side_effect=fake_openrouter_helper), \
+         patch('pseudonymize.pseudonymize_text', return_value='REDACTED'), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'):
+        extract_and_store_graph([('id1', 1, 'Jane Doe filed this.')], 'user-1', 'doc.pdf')
+
+    assert 'REDACTED' in captured['prompt']
+    assert 'Jane Doe' not in captured['prompt']
+
+
+def test_extract_and_store_graph_pseudonymize_failure_does_not_propagate():
+    """Fix #4: pseudonymize_text (Supabase mapping fetch) sits inside
+    extract_and_store_graph's own batch, called AFTER index_pdf's Qdrant
+    upserts for the document have already succeeded. If it raises
+    uncaught, the exception propagates out of index_pdf, leaving the
+    document "failed but actually partially indexed". The batch must fail
+    closed: log and skip graph extraction for this batch, never fall back
+    to sending raw unpseudonymized text, and never let the exception
+    escape extract_and_store_graph."""
+    from app import extract_and_store_graph
+
+    openrouter_called = MagicMock()
+
+    with patch('app._call_openrouter_helper', openrouter_called), \
+         patch('pseudonymize.pseudonymize_text', side_effect=Exception("Supabase mapping fetch failed")), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'):
+        # Must not raise -- this is the assertion. A prior version let the
+        # pseudonymize.pseudonymize_text exception propagate straight out
+        # of this call.
+        extract_and_store_graph([('id1', 1, 'Jane Doe filed this.')], 'user-1', 'doc.pdf')
+
+    # Fail closed: the LLM must never be called with raw (or any) text once
+    # pseudonymization itself failed for this batch.
+    openrouter_called.assert_not_called()
+
+
+def test_extract_and_store_graph_deanonymize_failure_does_not_propagate():
+    """Same fail-closed contract as the pseudonymize_text failure above, but
+    for the SECOND, distinct try/except in extract_and_store_graph -- the
+    one around deanonymize_text in the entity/triple processing loop. This
+    is a genuinely different failure point (the LLM call already
+    succeeded; it's the reverse-mapping fetch afterward that fails), and
+    must also skip graph persistence for the batch rather than let the
+    exception propagate out of index_pdf after that document's Qdrant
+    upserts already committed."""
+    from app import extract_and_store_graph
+    import json as json_module
+
+    llm_response = json_module.dumps([{
+        'chunk_index': 0,
+        'entities': [{'name': 'person_ab12', 'type': 'person', 'aliases': []}],
+        'triples': [],
+    }])
+    mock_supabase = MagicMock()
+
+    with patch('app.supabase_admin', mock_supabase), \
+         patch('app._call_openrouter_helper', return_value=llm_response), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=Exception("reverse mapping fetch failed")), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'):
+        # Must not raise -- deanonymize_text failing mid-loop must be caught
+        # by this function's own try/except, not propagate.
+        extract_and_store_graph([('id1', 1, 'Person filed this.')], 'user-1', 'doc.pdf')
+
+    # Fail closed: node/edge writes must never be attempted once
+    # deanonymize_text failed for this batch (would otherwise persist
+    # pseudonym tokens, or a partial/mismatched entity set, to the graph).
+    mock_supabase.table.assert_not_called()
+
+
+def test_extract_and_store_graph_deanonymizes_extracted_entity_names_before_storage():
+    """LLMs often echo input tokens verbatim: if the OpenRouter response contains
+    a pseudonym token (because it saw pseudonymized chunk text), the graph must
+    still end up storing the real value -- the retrieval pipeline downstream
+    reads graph_nodes/graph_edges and must never see pseudonyms."""
+    from app import extract_and_store_graph
+    import json as json_module
+
+    llm_response = json_module.dumps([{
+        'chunk_index': 0,
+        'entities': [{'name': 'PERSON_ab12', 'type': 'person', 'aliases': ['PERSON_ab12']}],
+        'triples': [{'subject': 'PERSON_ab12', 'relation': 'employs', 'object': 'ORG_cd34'}],
+    }])
+
+    def fake_deanonymize(text, org_id):
+        return (
+            text.replace('PERSON_ab12', 'Jane Doe')
+                .replace('ORG_cd34', 'Acme Corp')
+        )
+
+    mock_supabase = _graph_supabase_mock_nodes_edges([], [])
+    upserted = {}
+    inserted_edges = {}
+
+    def capture_upsert(rows, on_conflict=None):
+        upserted['rows'] = rows
+        upserted['on_conflict'] = on_conflict
+        result = MagicMock()
+        result.execute.return_value = MagicMock(data=[])
+        return result
+
+    def capture_insert(rows):
+        inserted_edges['rows'] = rows
+        result = MagicMock()
+        result.execute.return_value = MagicMock(data=[])
+        return result
+
+    mock_supabase.table.side_effect = (
+        lambda name: MagicMock(
+            select=MagicMock(return_value=MagicMock(
+                eq=MagicMock(return_value=MagicMock(
+                    execute=MagicMock(return_value=MagicMock(data=[]))
+                ))
+            )),
+            upsert=capture_upsert,
+        ) if name == 'graph_nodes' else MagicMock(insert=capture_insert)
+    )
+
+    with patch('app.supabase_admin', mock_supabase), \
+         patch('app.get_or_create_org_for_user', return_value='org-deanon-1'), \
+         patch('app._call_openrouter_helper', return_value=llm_response), \
+         patch('pseudonymize.deanonymize_text', side_effect=fake_deanonymize):
+        extract_and_store_graph([('c1', 1, 'Jane Doe employs Acme Corp.')], 'user-deanon-1', 'doc.pdf')
+
+    assert upserted['rows'][0]['entity_name'] == 'jane doe'
+    assert upserted['rows'][0]['aliases'] == ['jane doe']
+    assert inserted_edges['rows'][0]['source_entity'] == 'jane doe'
+    assert inserted_edges['rows'][0]['target_entity'] == 'acme corp'
+    assert 'person_ab12' not in upserted['rows'][0]['entity_name']
+    assert 'org_cd34' not in inserted_edges['rows'][0]['target_entity']
+
+
 # ---- Item C: alias-based entity linking ----
 
 def test_build_graph_from_supabase_loads_aliases_onto_nodes():
@@ -1231,6 +1621,10 @@ def test_ask_file_agentic_stops_iterating_once_relevant_chunks_found():
     from app import ask_file_agentic
     chunk = (0.9, '[Page 1, Source: doc.pdf] relevant content')
     with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
          patch('app.grade_chunks', return_value=([chunk[1]], [])) as mock_grade, \
@@ -1248,6 +1642,10 @@ def test_ask_file_agentic_bounded_by_max_iterations_when_nothing_ever_relevant()
     import app
     chunk = (0.5, '[Page 1, Source: doc.pdf] never graded relevant')
     with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
          patch('app.grade_chunks', return_value=([], [chunk[1]])), \
@@ -1268,6 +1666,10 @@ def test_ask_file_agentic_grading_failure_uses_retrieved_chunks_without_burning_
     from app import GradingUnavailableError
     chunk = (0.7, '[Page 1, Source: doc.pdf] some content')
     with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
          patch('app.grade_chunks', side_effect=GradingUnavailableError('grader down')), \
@@ -1286,6 +1688,10 @@ def test_ask_file_agentic_wall_clock_budget_stops_further_iterations():
     import app
     chunk = (0.5, '[Page 1, Source: doc.pdf] slow content')
     with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
          patch('app.CRAG_WALL_CLOCK_BUDGET_S', 0), \
          patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
@@ -1296,6 +1702,208 @@ def test_ask_file_agentic_wall_clock_budget_stops_further_iterations():
 
     # budget is already exhausted before the first iteration even starts
     assert mock_retrieve.call_count == 0
+
+
+def test_ask_file_agentic_sends_pseudonymized_prompt_to_generate_text():
+    """Raw chunk/question text must never reach the synthesis generate_text call --
+    only the pseudonymized copy."""
+    import app
+    captured = {}
+
+    def fake_generate_text(prompt, conversation_history=None):
+        captured['prompt'] = prompt
+        return 'The answer.'
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Jane Doe signed.')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=lambda q, texts: (texts, [])), \
+         patch('app.generate_text', side_effect=fake_generate_text):
+        app.ask_file_agentic('Who signed?', 'user-1')
+
+    assert 'PERSON_ab12' in captured['prompt']
+    assert 'Jane Doe' not in captured['prompt']
+
+
+def test_ask_file_agentic_sends_pseudonymized_chunks_to_grade_chunks():
+    """Raw chunk/question text must never reach grade_chunks -- only the
+    pseudonymized copy. Unlike the generate_text/graph-extraction call
+    sites, this one was previously untested: existing tests stubbed
+    grade_chunks with an identity side_effect and asserted only call
+    count, which would not catch a regression that skipped
+    pseudonymizing pseudo_texts/pseudo_sub_q before this call."""
+    import app
+    captured = {}
+
+    def fake_grade_chunks(sub_q, texts):
+        captured['sub_q'] = sub_q
+        captured['texts'] = texts
+        return texts, []
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Jane Doe signed.')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=fake_grade_chunks), \
+         patch('app.generate_text', return_value='Answer'):
+        app.ask_file_agentic('Who is Jane Doe?', 'user-1')
+
+    assert 'PERSON_ab12' in captured['sub_q']
+    assert 'Jane Doe' not in captured['sub_q']
+    assert all('PERSON_ab12' in t and 'Jane Doe' not in t for t in captured['texts'])
+
+
+def test_ask_file_agentic_sends_pseudonymized_query_to_reformulate_query():
+    """Same guarantee as above for reformulate_query -- only reached when
+    the first CRAG iteration finds nothing relevant, so exercised via a
+    grade_chunks side_effect that returns empty on the first call."""
+    import app
+    captured = {}
+
+    def fake_reformulate(query):
+        captured['query'] = query
+        return query
+
+    grade_calls = {'n': 0}
+
+    def fake_grade_chunks(sub_q, texts):
+        grade_calls['n'] += 1
+        if grade_calls['n'] == 1:
+            return [], texts  # nothing relevant -> triggers reformulation
+        return texts, []
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Jane Doe signed.')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=fake_grade_chunks), \
+         patch('app.reformulate_query', side_effect=fake_reformulate), \
+         patch('app.generate_text', return_value='Answer'):
+        app.ask_file_agentic('Who is Jane Doe?', 'user-1')
+
+    assert 'PERSON_ab12' in captured['query']
+    assert 'Jane Doe' not in captured['query']
+
+
+def test_ask_file_agentic_deanonymizes_final_answer():
+    """The final answer handed back to the caller must be deanonymized -- an LLM
+    that echoes a pseudonym token back must never leak it to the user."""
+    import app
+    chunk = (0.9, '[Page 1, Source: doc.pdf] some text')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t.replace('PERSON_ab12', 'Jane Doe')), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=lambda q, texts: (texts, [])), \
+         patch('app.generate_text', return_value='Signed by PERSON_ab12.'):
+        response, _ = app.ask_file_agentic('Who signed?', 'user-1')
+
+    assert response == 'Signed by Jane Doe.'
+
+
+def test_ask_file_agentic_pseudonymizes_conversation_history_before_generate_text():
+    """conversation_history's raw question/answer text must not reach
+    generate_text -- it's placed directly into the provider messages,
+    bypassing the prompt's own pseudonymization, so a prior turn's real PII
+    (e.g. a name) would otherwise leak on every multi-turn request."""
+    import app
+    captured = {}
+
+    def fake_generate_text(prompt, conversation_history=None):
+        captured['history'] = conversation_history
+        return 'Answer'
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] some text')
+    prior_turns = [{'question': 'Who is Jane Doe?', 'answer': 'Jane Doe is the CFO.'}]
+
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=lambda q, texts: (texts, [])), \
+         patch('app.generate_text', side_effect=fake_generate_text):
+        app.ask_file_agentic('What about her role?', 'user-1', conversation_history=prior_turns)
+
+    assert captured['history'] == [{'question': 'Who is PERSON_ab12?', 'answer': 'PERSON_ab12 is the CFO.'}]
+    assert 'Jane Doe' not in str(captured['history'])
+    # The raw object handed in must stay untouched -- callers reuse it for
+    # query_history storage and for what's shown in the UI.
+    assert prior_turns == [{'question': 'Who is Jane Doe?', 'answer': 'Jane Doe is the CFO.'}]
+
+
+def test_ask_file_pseudonymizes_conversation_history_before_generate_text():
+    """Same guarantee as above for the non-agentic ask_file() fallback path."""
+    import app
+    captured = {}
+
+    def fake_generate_text(prompt, conversation_history=None):
+        captured['history'] = conversation_history
+        return 'Answer'
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Some text')
+    prior_turns = [{'question': 'Who is Jane Doe?', 'answer': 'Jane Doe is the CFO.'}]
+
+    with patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.find_relevant_chunks', return_value=[chunk]), \
+         patch('app.generate_text', side_effect=fake_generate_text):
+        app.ask_file('What about her role?', 'user-1', conversation_history=prior_turns)
+
+    assert captured['history'] == [{'question': 'Who is PERSON_ab12?', 'answer': 'PERSON_ab12 is the CFO.'}]
+    assert 'Jane Doe' not in str(captured['history'])
+
+
+def test_ask_file_agentic_short_question_skips_decompose_deanonymize_roundtrip():
+    """decompose_query's <=10-word fast path returns [pseudo_question] without
+    making an LLM call -- deanonymizing it back would be a pointless lossy
+    round trip. The raw `question` must be used directly as the sole
+    sub-query instead."""
+    import app
+    chunk = (0.9, '[Page 1, Source: doc.pdf] relevant content')
+    deanonymize_calls = []
+
+    def fake_deanonymize(text, org_id):
+        deanonymize_calls.append(text)
+        return text
+
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=fake_deanonymize), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]) as mock_retrieve, \
+         patch('app.grade_chunks', return_value=([chunk[1]], [])), \
+         patch('app.generate_text', return_value='Answer'):
+        response, sources = app.ask_file_agentic('short question', 'user-1')
+
+    assert response == 'Answer'
+    # Retrieval used the raw question directly as the sub-query.
+    assert mock_retrieve.call_args.args[0] == 'short question'
+    # decompose_query's identity output was never round-tripped through
+    # deanonymize_text (only the final answer was).
+    assert 'short question' not in deanonymize_calls
 
 
 # ---- Pass 3, item B: org-level graph tier ----
@@ -1624,3 +2232,55 @@ def test_security_pending_join_request_grants_no_visibility_until_approved():
     # and even a fresh lookup would still hit org_members unmodified
     assert get_or_create_org_for_user('pending-user') == 'sec-org-original'
     del _org_id_store['pending-user']
+
+
+def test_gemini_fallback_advances_to_next_model_on_failure():
+    """A 503/quota error on the first model in the chain must not abort the
+    call — it should retry with the next free-tier model before giving up."""
+    from app import _call_gemini_with_fallback
+
+    attempted_models = []
+
+    def make_request(model):
+        attempted_models.append(model)
+        if model == 'gemini-3.5-flash':
+            raise RuntimeError('503 UNAVAILABLE')
+        resp = MagicMock()
+        resp.text = 'answer from fallback model'
+        return resp
+
+    with patch('app.GEMINI_MODEL_CHAIN', ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.0-flash']):
+        result = _call_gemini_with_fallback(make_request)
+
+    assert result == 'answer from fallback model'
+    assert attempted_models == ['gemini-3.5-flash', 'gemini-3.5-flash-lite']
+
+
+def test_gemini_fallback_raises_after_exhausting_entire_chain():
+    """All models down (e.g. account-wide outage) must surface an error to the
+    caller, not silently return an empty string."""
+    from app import _call_gemini_with_fallback
+
+    def make_request(model):
+        raise RuntimeError(f'503 UNAVAILABLE for {model}')
+
+    with patch('app.GEMINI_MODEL_CHAIN', ['gemini-3.5-flash', 'gemini-3.5-flash-lite']):
+        with pytest.raises(RuntimeError, match='gemini-3.5-flash-lite'):
+            _call_gemini_with_fallback(make_request)
+
+
+def test_gemini_fallback_treats_empty_content_as_failure_and_advances():
+    """A reasoning-style empty response from one model must not be returned as
+    a blank 'successful' answer — it should be treated like an error and
+    advance to the next model in the chain."""
+    from app import _call_gemini_with_fallback
+
+    def make_request(model):
+        resp = MagicMock()
+        resp.text = '' if model == 'gemini-3.5-flash' else 'real answer'
+        return resp
+
+    with patch('app.GEMINI_MODEL_CHAIN', ['gemini-3.5-flash', 'gemini-3.5-flash-lite']):
+        result = _call_gemini_with_fallback(make_request)
+
+    assert result == 'real answer'
