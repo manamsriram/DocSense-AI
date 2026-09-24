@@ -29,9 +29,15 @@ if MODEL_ROLE == 'embed':
 else:
     from fastembed.rerank.cross_encoder import TextCrossEncoder
     _reranker_model = TextCrossEncoder(
-        model_name='Xenova/ms-marco-MiniLM-L-6-v2',
+        model_name='Xenova/ms-marco-MiniLM-L-12-v2',
         cache_dir=CACHE_DIR,
-        threads=1
+        threads=1,
+        # L-12-v2's larger activations previously ratcheted onnxruntime's CPU
+        # arena past the 512MB dyno's budget over a session's inference
+        # calls — the arena grows and never releases back to the OS. This
+        # disables the arena allocator so memory is freed after each call
+        # instead of held and grown (per-call alloc overhead, but bounded).
+        enable_cpu_mem_arena=False
     )
 
 
