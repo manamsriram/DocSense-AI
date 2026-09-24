@@ -2232,3 +2232,55 @@ def test_security_pending_join_request_grants_no_visibility_until_approved():
     # and even a fresh lookup would still hit org_members unmodified
     assert get_or_create_org_for_user('pending-user') == 'sec-org-original'
     del _org_id_store['pending-user']
+
+
+def test_gemini_fallback_advances_to_next_model_on_failure():
+    """A 503/quota error on the first model in the chain must not abort the
+    call — it should retry with the next free-tier model before giving up."""
+    from app import _call_gemini_with_fallback
+
+    attempted_models = []
+
+    def make_request(model):
+        attempted_models.append(model)
+        if model == 'gemini-3.5-flash':
+            raise RuntimeError('503 UNAVAILABLE')
+        resp = MagicMock()
+        resp.text = 'answer from fallback model'
+        return resp
+
+    with patch('app.GEMINI_MODEL_CHAIN', ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.0-flash']):
+        result = _call_gemini_with_fallback(make_request)
+
+    assert result == 'answer from fallback model'
+    assert attempted_models == ['gemini-3.5-flash', 'gemini-3.5-flash-lite']
+
+
+def test_gemini_fallback_raises_after_exhausting_entire_chain():
+    """All models down (e.g. account-wide outage) must surface an error to the
+    caller, not silently return an empty string."""
+    from app import _call_gemini_with_fallback
+
+    def make_request(model):
+        raise RuntimeError(f'503 UNAVAILABLE for {model}')
+
+    with patch('app.GEMINI_MODEL_CHAIN', ['gemini-3.5-flash', 'gemini-3.5-flash-lite']):
+        with pytest.raises(RuntimeError, match='gemini-3.5-flash-lite'):
+            _call_gemini_with_fallback(make_request)
+
+
+def test_gemini_fallback_treats_empty_content_as_failure_and_advances():
+    """A reasoning-style empty response from one model must not be returned as
+    a blank 'successful' answer — it should be treated like an error and
+    advance to the next model in the chain."""
+    from app import _call_gemini_with_fallback
+
+    def make_request(model):
+        resp = MagicMock()
+        resp.text = '' if model == 'gemini-3.5-flash' else 'real answer'
+        return resp
+
+    with patch('app.GEMINI_MODEL_CHAIN', ['gemini-3.5-flash', 'gemini-3.5-flash-lite']):
+        result = _call_gemini_with_fallback(make_request)
+
+    assert result == 'real answer'

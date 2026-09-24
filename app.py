@@ -62,7 +62,32 @@ ANSWER_MODEL = os.getenv('ANSWER_MODEL', 'google/gemini-2.5-flash')
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+# Free-tier Flash/Flash-Lite models to try in order when GEMINI_MODEL is
+# unavailable (429 quota exhaustion, 503 overload) — each model has its own
+# separate free-tier quota, so cycling through them survives one being down.
+_GEMINI_FALLBACK_CHAIN_DEFAULT = 'gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3-flash-preview,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-2.0-flash'
+GEMINI_MODEL_CHAIN = list(dict.fromkeys(
+    [GEMINI_MODEL] + [m.strip() for m in os.getenv('GEMINI_MODEL_CHAIN', _GEMINI_FALLBACK_CHAIN_DEFAULT).split(',') if m.strip()]
+))
 _gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+
+def _call_gemini_with_fallback(make_request):
+    """Try each model in GEMINI_MODEL_CHAIN in turn; returns text from the first
+    one that succeeds with non-empty content. make_request(model_name) must
+    return a genai response object with a `.text` attribute.
+    """
+    last_err = None
+    for model in GEMINI_MODEL_CHAIN:
+        try:
+            text = (make_request(model).text or '').strip()
+            if text:
+                return text
+            last_err = RuntimeError(f"gemini model {model} returned empty content")
+        except Exception as e:
+            last_err = e
+            logging.warning(f"[gemini] model {model} failed ({e}), trying next in chain")
+    raise last_err or RuntimeError("GEMINI_MODEL_CHAIN is empty")
 
 COLLECTION = 'documents'
 
@@ -1680,8 +1705,9 @@ def _call_groq_helper(user_content, max_tokens, temperature=0.0, model=None):
         logging.warning(f"Groq helper failed ({e}), trying Gemini")
     if not _gemini_client:
         raise RuntimeError("Groq failed and no GEMINI_API_KEY configured")
-    resp = _gemini_client.models.generate_content(model=GEMINI_MODEL, contents=user_content)
-    return resp.text.strip()
+    return _call_gemini_with_fallback(
+        lambda model: _gemini_client.models.generate_content(model=model, contents=user_content)
+    )
 
 
 def decompose_query(question):
@@ -1813,17 +1839,16 @@ def generate_text(prompt, conversation_history=None):
         for turn in (conversation_history or []):
             history.append(genai_types.Content(role='user', parts=[genai_types.Part(text=turn['question'])]))
             history.append(genai_types.Content(role='model', parts=[genai_types.Part(text=turn['answer'])]))
-        chat = _gemini_client.chats.create(
-            model=GEMINI_MODEL,
-            history=history,
-            config=genai_types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
-        )
-        response = chat.send_message(prompt)
-        content = response.text.strip()
-        if not content:
-            logging.warning(f"[eval] gemini_empty_content=true model={GEMINI_MODEL}")
-            return None
-        return content
+
+        def make_request(model):
+            chat = _gemini_client.chats.create(
+                model=model,
+                history=history,
+                config=genai_types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
+            )
+            return chat.send_message(prompt)
+
+        return _call_gemini_with_fallback(make_request)
     except Exception as e:
         logging.error(f"Gemini fallback also failed: {e}", exc_info=True)
         return None
