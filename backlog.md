@@ -76,6 +76,37 @@ something to bundle into the pseudonymization work (item below). Raised
 raw text to retrieve well, so pseudonymizing what's stored in Qdrant isn't
 a substitute for this — genuinely needs its own infra change.
 
+### 7. CRAG_WALL_CLOCK_BUDGET_S (12s) is tighter than observed retrieval latency — root cause noted, not fixed
+PR #3 (pseudonymization, merged 2026-09-24) eval runs came in at
+weighted_rag_score 0.551-0.593 vs. best historical 0.652, which looked like
+a regression from the diff at first. Investigated instead of blocking the
+merge:
+
+- `pseudonymize_text`/`deanonymize_text` are cache-backed (single-digit ms
+  once warm) — not the cause. Retrieval itself
+  (`find_relevant_chunks_with_graph`) and `CRAG_WALL_CLOCK_BUDGET_S` are
+  byte-identical to master in this diff.
+- Real cause #1 (fixed in this PR): `gemini-3.5-flash`'s free tier is
+  20 requests/day — quota exhaustion (`429 RESOURCE_EXHAUSTED`) mid-eval
+  silently dropped answers before the fix. Added `GEMINI_MODEL_CHAIN`
+  fallback (flash -> flash-lite -> 3-flash-preview -> 2.5-flash ->
+  2.5-flash-lite -> 2.0-flash) in `_call_gemini_with_fallback()`. Confirmed
+  firing correctly on a live 429 mid-run; score improved 0.551 -> 0.593
+  after this alone.
+- Real cause #2 (NOT fixed, still open): `retrieval_iter0` was observed
+  taking 12.9s-22.8s per call against cloud Qdrant from a local eval
+  environment, but `CRAG_WALL_CLOCK_BUDGET_S` is hardcoded to 12s — so the
+  CRAG loop aborts before grading even runs on any slow-retrieval query,
+  producing "couldn't find relevant information" (0 retrieval_recall) on
+  otherwise-answerable questions. This is pre-existing, unrelated to the
+  pseudonymization diff, and is likely why the noisy 0.426-0.652 range in
+  item 1/Notes above exists at all — whatever run scored 0.652 probably
+  just had a faster Qdrant round-trip that run, not different code.
+  Needs its own fix: either raise the budget, make it adaptive to observed
+  retrieval latency, or investigate why retrieval itself is sometimes
+  12-22s (network path, embedding-call latency, Qdrant load) as a separate
+  session.
+
 ## Notes on process
 - Always re-run `python evals/run_eval.py` against the live endpoint after
   any change — local eval doesn't reflect prod's ingestion path or real
