@@ -15,7 +15,7 @@ RUN PYTHONPATH=/install/lib/python3.11/site-packages python -c "\
 from fastembed import TextEmbedding; \
 from fastembed.rerank.cross_encoder import TextCrossEncoder; \
 TextEmbedding(model_name='sentence-transformers/all-MiniLM-L6-v2', cache_dir='/model-cache'); \
-TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-6-v2', cache_dir='/model-cache'); \
+TextCrossEncoder(model_name='Xenova/ms-marco-MiniLM-L-12-v2', cache_dir='/model-cache'); \
 print('Models pre-downloaded.') \
 "
 
