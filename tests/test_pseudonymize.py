@@ -233,14 +233,14 @@ def test_deanonymize_reverse_cache_is_atomic():
     assert result == 'Jane Doe signed.', "Deanonymize should work with atomic cache"
 
 
-def test_make_pseudonym_digest_is_8_hex_chars():
-    """4 hex chars (16 bits) collides ~50% of the time (birthday paradox) once
-    an org has ~300 distinct names of one entity type -- 8 hex chars (32 bits)
-    pushes that threshold out to ~77,000 names."""
+def test_make_pseudonym_digest_is_16_hex_chars():
+    """16 hex chars (64 bits) with no DB uniqueness constraint on
+    (org_id, pseudonym) pushes the birthday-paradox 50%-collision point out
+    to ~5 billion distinct values per org."""
     pseudonym = pseudonymize._make_pseudonym('PERSON', 'Jane Doe', 'org-1')
     prefix, _, digest = pseudonym.rpartition('_')
     assert prefix == 'PERSON'
-    assert len(digest) == 8
+    assert len(digest) == 16
     assert all(c in '0123456789abcdef' for c in digest)
 
 

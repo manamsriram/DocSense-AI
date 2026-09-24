@@ -954,11 +954,15 @@ def test_index_pdf_registers_entities_for_each_flushed_chunk(tmp_path):
     assert any('John Smith' in text for text, _ in calls)
 
 
-def test_index_pdf_continues_indexing_when_entity_registration_fails(tmp_path):
-    """detect_and_register_entities is an auxiliary side effect (populating the
-    pseudonymization mapping table), not part of the retrieval-critical path —
-    a Presidio/Supabase failure registering one chunk's entities must not abort
-    indexing of that chunk or the document. The upsert must still happen."""
+def test_index_pdf_skips_chunk_when_entity_registration_fails(tmp_path):
+    """detect_and_register_entities populates the pseudonymization mapping
+    table that later LLM calls (grading, synthesis, graph extraction) rely
+    on to substitute PII out of a chunk's text. pseudonymize_text never
+    re-runs NER — it only substitutes entities already registered — so a
+    chunk whose registration failed would otherwise be indexed with its PII
+    permanently unprotected against every future LLM call on that chunk.
+    Fail closed: skip the chunk (and the whole document, if every chunk's
+    registration fails) rather than index it half-protected."""
     import pymupdf
     from app import index_pdf
 
@@ -978,8 +982,42 @@ def test_index_pdf_continues_indexing_when_entity_registration_fails(tmp_path):
         mock_qdrant.scroll.return_value = ([], None)
         result = index_pdf(str(pdf_path), 'entity-fail-test-user', display_name='doc.pdf')
 
-    assert result > 0
-    mock_qdrant.upsert.assert_called_once()
+    assert result == 0
+    mock_qdrant.upsert.assert_not_called()
+
+
+def test_index_pdf_indexes_other_chunks_when_one_registration_fails(tmp_path):
+    """A registration failure on one page's chunk must not drop sibling
+    chunks from other pages that registered successfully — only the failing
+    chunk is excluded (points/embed_texts stay aligned after filtering)."""
+    import pymupdf
+    from app import index_pdf
+
+    pdf_path = tmp_path / "doc.pdf"
+    doc = pymupdf.open()
+    page1 = doc.new_page()
+    page1.insert_text((72, 72), "Page one has no PII at all in it.")
+    page2 = doc.new_page()
+    page2.insert_text((72, 72), "Contact Jane Doe at jane.doe@example.com for details.")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    def fail_on_page_two(text, org_id):
+        if 'Jane Doe' in text:
+            raise RuntimeError('supabase unavailable')
+
+    with patch('app.get_or_create_org_for_user', return_value='org-partial-fail-test'), \
+         patch('app.qdrant') as mock_qdrant, \
+         patch('app.get_embedding_model', return_value=_fake_embedding_model()), \
+         patch('app.extract_and_store_graph'), \
+         patch('pseudonymize.detect_and_register_entities', side_effect=fail_on_page_two):
+        mock_qdrant.scroll.return_value = ([], None)
+        result = index_pdf(str(pdf_path), 'partial-fail-test-user', display_name='doc.pdf')
+
+    assert result == 1
+    upserted_points = mock_qdrant.upsert.call_args.kwargs['points']
+    assert len(upserted_points) == 1
+    assert upserted_points[0].payload['page'] == 1
 
 
 def test_index_pdf_flushes_normally_when_no_entities_detected(tmp_path):

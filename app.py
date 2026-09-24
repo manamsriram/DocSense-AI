@@ -31,9 +31,10 @@ from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, Fi
 from rank_bm25 import BM25Okapi
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from supabase import create_client, Client
-import pseudonymize
 
 load_dotenv()
+import pseudonymize
+
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__, static_url_path='', static_folder='.')
@@ -750,11 +751,24 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
         nonlocal points, embed_texts, total_indexed
         if not points:
             return
-        for _, _, display_text, _ in points:
+        # Fail closed: a chunk whose PII entities failed to register would
+        # never get substituted by pseudonymize_text on any later LLM call
+        # (grading, synthesis, graph extraction), silently leaking its raw
+        # PII to a third-party provider. Drop the chunk entirely rather
+        # than index it half-protected.
+        ok_points, ok_embed_texts = [], []
+        for point, embed_text in zip(points, embed_texts):
+            _, _, display_text, _ = point
             try:
                 pseudonymize.detect_and_register_entities(display_text, org_id)
             except Exception as e:
-                logging.warning(f"[pseudonymize] entity registration failed for org {org_id}: {e}")
+                logging.error(f"[pseudonymize] entity registration failed for org {org_id}, skipping chunk (fail-closed): {e}")
+                continue
+            ok_points.append(point)
+            ok_embed_texts.append(embed_text)
+        points, embed_texts = ok_points, ok_embed_texts
+        if not points:
+            return
         vecs = list(get_embedding_model().embed(embed_texts))
         qdrant.upsert(
             collection_name=COLLECTION,
@@ -1069,52 +1083,60 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
     nodes_to_upsert = {}
     edges_to_insert = []
 
-    for item in results:
-        idx = item.get('chunk_index', 0)
-        if idx >= len(batch_chunks):
-            continue
-        chunk_id, page_num, _ = batch_chunks[idx]
-
-        for ent in item.get('entities', []):
-            # The LLM saw pseudonymized chunk text and may echo pseudonym
-            # tokens back as entity names -- per _GRAPH_EXTRACT_PROMPT's
-            # "normalize to canonical lowercase" instruction, usually
-            # lowercased (e.g. "person_ab12" for stored "PERSON_ab12").
-            # deanonymize_text matches case-insensitively (see
-            # pseudonymize._compile_pattern) but always substitutes the
-            # canonical stored real value, so the graph stores real values
-            # only, same as it would without pseudonymization.
-            name = pseudonymize.deanonymize_text(ent.get('name', ''), org_id).strip().lower()
-            if not name:
+    try:
+        for item in results:
+            idx = item.get('chunk_index', 0)
+            if idx >= len(batch_chunks):
                 continue
-            aliases = {
-                pseudonymize.deanonymize_text(a, org_id).strip().lower()
-                for a in ent.get('aliases', []) if a and a.strip()
-            }
-            if name not in nodes_to_upsert:
-                nodes_to_upsert[name] = {
-                    'entity_type': ent.get('type'),
-                    'aliases': aliases,
+            chunk_id, page_num, _ = batch_chunks[idx]
+
+            for ent in item.get('entities', []):
+                # The LLM saw pseudonymized chunk text and may echo pseudonym
+                # tokens back as entity names -- per _GRAPH_EXTRACT_PROMPT's
+                # "normalize to canonical lowercase" instruction, usually
+                # lowercased (e.g. "person_ab12" for stored "PERSON_ab12").
+                # deanonymize_text matches case-insensitively (see
+                # pseudonymize._compile_pattern) but always substitutes the
+                # canonical stored real value, so the graph stores real values
+                # only, same as it would without pseudonymization.
+                name = pseudonymize.deanonymize_text(ent.get('name', ''), org_id).strip().lower()
+                if not name:
+                    continue
+                aliases = {
+                    pseudonymize.deanonymize_text(a, org_id).strip().lower()
+                    for a in ent.get('aliases', []) if a and a.strip()
                 }
-            else:
-                nodes_to_upsert[name]['aliases'] |= aliases
+                if name not in nodes_to_upsert:
+                    nodes_to_upsert[name] = {
+                        'entity_type': ent.get('type'),
+                        'aliases': aliases,
+                    }
+                else:
+                    nodes_to_upsert[name]['aliases'] |= aliases
 
-        for triple in item.get('triples', []):
-            subj = pseudonymize.deanonymize_text(triple.get('subject', ''), org_id).strip().lower()
-            rel  = triple.get('relation', '').strip().lower()
-            obj  = pseudonymize.deanonymize_text(triple.get('object', ''), org_id).strip().lower()
-            if not (subj and rel and obj):
-                continue
-            edges_to_insert.append({
-                'user_id': user_id,
-                'org_id': org_id,
-                'source_entity': subj,
-                'relation': rel,
-                'target_entity': obj,
-                'chunk_id': chunk_id,
-                'source_doc': source_doc,
-                'page_num': page_num,
-            })
+            for triple in item.get('triples', []):
+                subj = pseudonymize.deanonymize_text(triple.get('subject', ''), org_id).strip().lower()
+                rel  = triple.get('relation', '').strip().lower()
+                obj  = pseudonymize.deanonymize_text(triple.get('object', ''), org_id).strip().lower()
+                if not (subj and rel and obj):
+                    continue
+                edges_to_insert.append({
+                    'user_id': user_id,
+                    'org_id': org_id,
+                    'source_entity': subj,
+                    'relation': rel,
+                    'target_entity': obj,
+                    'chunk_id': chunk_id,
+                    'source_doc': source_doc,
+                    'page_num': page_num,
+                })
+    except Exception as e:
+        # deanonymize_text can hit Supabase (reverse mapping fetch) -- fail
+        # closed here too: skip graph persistence entirely for this batch
+        # rather than let a mid-loop failure propagate out of index_pdf
+        # after that document's Qdrant upserts already succeeded.
+        logging.warning(f"[graph] deanonymize_text failed for batch in {source_doc}, skipping graph persistence: {e}")
+        return
 
     if nodes_to_upsert:
         try:

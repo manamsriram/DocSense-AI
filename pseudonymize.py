@@ -87,12 +87,15 @@ def _make_pseudonym(entity_type, real_value, org_id):
     # pseudonym per org (no cross-tenant linkage). Still deterministic per
     # (org_id, real_value), so the upsert race in get_or_create_pseudonym
     # stays benign -- two concurrent callers compute the same pseudonym.
-    # 8 hex chars (32 bits) -- 4 chars (16 bits) collides ~50% of the time
-    # (birthday paradox) once an org has ~300 distinct names of one entity
-    # type, which could put the wrong real name in a deanonymized answer.
+    # 16 hex chars (64 bits) -- the DB has no uniqueness constraint on
+    # (org_id, pseudonym) (only on (org_id, real_value)), so a collision
+    # between two different real values would silently let one upsert
+    # overwrite the other's mapping row and deanonymize to the wrong
+    # value. 64 bits pushes the birthday-bound 50%-collision point to
+    # ~5 billion distinct values per org.
     digest = hmac.new(
         PSEUDONYM_SECRET, f'{org_id}:{real_value}'.encode(), hashlib.sha256
-    ).hexdigest()[:8]
+    ).hexdigest()[:16]
     return f'{entity_type}_{digest}'
 
 
@@ -127,6 +130,10 @@ def get_or_create_pseudonym(org_id, real_value, entity_type):
 _MAPPING_CACHE_TTL_S = 30
 _mapping_cache = {}   # org_id -> (fetched_at, {real_value: pseudonym}, compiled_pattern)
 _mapping_cache_lock = threading.Lock()
+# org_id -> int, bumped by _invalidate_mapping_cache. Lets an in-flight
+# refresh detect that it raced a registration and was invalidated mid-fetch,
+# so it doesn't republish a snapshot missing the newly-registered entity.
+_mapping_generation = {}
 
 # Reverse mapping cache with its own compiled pattern. Atomic tuple ensures
 # pattern and mapping always come from the same fetch — prevents stale pattern
@@ -152,9 +159,14 @@ def _compile_pattern(mapping):
     """
     if not mapping:
         return None
-    # Build pattern with word boundaries: \b(?:...|...)\b
-    # This prevents "John" from matching inside "Johnny"
-    pattern_str = r'\b(?:' + '|'.join(re.escape(k) for k in sorted(mapping, key=len, reverse=True)) + r')\b'
+    # Anchor on adjacent word characters rather than \b: a real_value like
+    # a phone number ("+1 (555) 123-4567") starts/ends with punctuation, so
+    # \b (a transition between \w and \W) never matches there and the value
+    # would never be substituted. (?<!\w)/(?!\w) still block "John" from
+    # matching inside "Johnny", but also match at a leading/trailing
+    # non-word character.
+    alternation = '|'.join(re.escape(k) for k in sorted(mapping, key=len, reverse=True))
+    pattern_str = r'(?<!\w)(?:' + alternation + r')(?!\w)'
     return re.compile(pattern_str, re.IGNORECASE)
 
 
@@ -188,14 +200,29 @@ def _fetch_org_mapping(org_id):
         cached = _mapping_cache.get(org_id)
         if cached and time.monotonic() - cached[0] < _MAPPING_CACHE_TTL_S:
             return cached[1], cached[2]
+        generation = _mapping_generation.get(org_id, 0)
 
     rows = _fetch_all_mapping_rows(org_id)
     mapping = {row['real_value']: row['pseudonym'] for row in rows}
     pattern = _compile_pattern(mapping)
 
     with _mapping_cache_lock:
+        # If a registration invalidated the cache (bumped the generation)
+        # while this fetch was in flight, this snapshot may already be
+        # stale -- don't publish it over the invalidation. Retry instead
+        # of returning it directly, so the cache always ends up holding
+        # a snapshot at least as fresh as the last invalidation.
+        if _mapping_generation.get(org_id, 0) != generation:
+            return None
         _mapping_cache[org_id] = (time.monotonic(), mapping, pattern)
     return mapping, pattern
+
+
+def _fetch_org_mapping_with_retry(org_id):
+    result = _fetch_org_mapping(org_id)
+    while result is None:
+        result = _fetch_org_mapping(org_id)
+    return result
 
 
 def _fetch_org_mapping_reverse(org_id):
@@ -214,7 +241,7 @@ def _fetch_org_mapping_reverse(org_id):
     """
     # Ensures the forward cache is fresh (refetches if its TTL expired);
     # idempotent no-op cost if it's still fresh.
-    _fetch_org_mapping(org_id)
+    _fetch_org_mapping_with_retry(org_id)
     with _mapping_cache_lock:
         forward_fetched_at, forward_mapping, _ = _mapping_cache[org_id]
 
@@ -237,6 +264,7 @@ def _invalidate_mapping_cache(org_id):
     pseudonym is usable in a query."""
     with _mapping_cache_lock:
         _mapping_cache.pop(org_id, None)
+        _mapping_generation[org_id] = _mapping_generation.get(org_id, 0) + 1
     with _reverse_mapping_cache_lock:
         _reverse_mapping_cache.pop(org_id, None)
 
@@ -300,7 +328,7 @@ def _substitute(text, mapping, pattern):
 
 
 def pseudonymize_text(text, org_id):
-    mapping, pattern = _fetch_org_mapping(org_id)
+    mapping, pattern = _fetch_org_mapping_with_retry(org_id)
     return _substitute(text, mapping, pattern)
 
 
