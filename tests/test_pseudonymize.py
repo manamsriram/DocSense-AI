@@ -16,9 +16,11 @@ def _clear_mapping_cache():
     failures. Also clears the reverse-mapping cache for the same reason."""
     pseudonymize._mapping_cache.clear()
     pseudonymize._reverse_mapping_cache.clear()
+    pseudonymize._entity_types_cache.clear()
     yield
     pseudonymize._mapping_cache.clear()
     pseudonymize._reverse_mapping_cache.clear()
+    pseudonymize._entity_types_cache.clear()
 
 
 def _mock_supabase_table(rows_by_table, range_pages=None):
@@ -52,10 +54,10 @@ def _mock_supabase_table(rows_by_table, range_pages=None):
                     page_result.data = _pages.pop(0) if _pages else []
                     return page_result
 
-                range_mock = tbl.select.return_value.eq.return_value.range
+                range_mock = tbl.select.return_value.eq.return_value.order.return_value.range
                 range_mock.return_value.execute.side_effect = range_execute_side_effect
             else:
-                tbl.select.return_value.eq.return_value.range.return_value.execute.return_value = result
+                tbl.select.return_value.eq.return_value.order.return_value.range.return_value.execute.return_value = result
 
             tbl_cache[name] = tbl
         return tbl_cache[name]
@@ -83,6 +85,18 @@ def test_get_org_entity_types_returns_org_override():
     )
     with patch('pseudonymize.app.supabase_admin', fake_supabase):
         assert pseudonymize.get_org_entity_types('org-1') == ['PERSON', 'US_SSN']
+
+
+def test_get_org_entity_types_falls_back_on_malformed_shape():
+    """pseudonymize_entities is unconstrained jsonb -- a malformed value
+    (e.g. a string instead of a list) must fall back to
+    DEFAULT_ENTITY_TYPES with a clear error, not get handed straight to
+    Presidio's entities= param where it would fail opaquely mid-NER."""
+    fake_supabase = _mock_supabase_table(
+        {'orgs': [{'pseudonymize_entities': 'PERSON'}]}  # string, not a list
+    )
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        assert pseudonymize.get_org_entity_types('org-1') == DEFAULT_ENTITY_TYPES
 
 
 def test_get_or_create_pseudonym_creates_new_mapping_when_absent():
@@ -159,6 +173,52 @@ def test_detect_and_register_entities_skips_too_short_detection():
     fake_supabase.table.return_value.upsert.assert_not_called()
 
 
+def test_detect_and_register_query_entities_registers_structured_pii():
+    """Critical fix: a question is never ingested, so pseudonymize_text alone
+    leaves PII typed directly into it unchanged. This regex-only,
+    NER-free counterpart must register structured PII (SSN, email, phone,
+    card) found directly in question text so a subsequent pseudonymize_text
+    call actually substitutes it."""
+    fake_supabase = _mock_supabase_table({
+        'orgs': [{'pseudonymize_entities': ['US_SSN', 'EMAIL_ADDRESS']}],
+        'pseudonym_mappings': [],
+    })
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        pseudonymize.detect_and_register_query_entities(
+            'Is 123-45-6789 or jane@example.com in these files?', 'org-1'
+        )
+    upserted = [c[0][0] for c in fake_supabase.table.return_value.upsert.call_args_list]
+    real_values = {row['real_value'] for row in upserted}
+    assert real_values == {'123-45-6789', 'jane@example.com'}
+
+
+def test_detect_and_register_query_entities_skips_types_not_in_org_config():
+    """An entity type not in the org's configured pseudonymize_entities must
+    not be registered, same scoping detect_and_register_entities honors."""
+    fake_supabase = _mock_supabase_table({
+        'orgs': [{'pseudonymize_entities': ['EMAIL_ADDRESS']}],  # SSN not included
+        'pseudonym_mappings': [],
+    })
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        pseudonymize.detect_and_register_query_entities('SSN is 123-45-6789.', 'org-1')
+    fake_supabase.table.return_value.upsert.assert_not_called()
+
+
+def test_detect_and_register_query_entities_skips_person_and_location():
+    """PERSON/LOCATION need spaCy NER and are deliberately NOT covered by
+    this regex-only query-time path (see module comment on
+    _QUERY_TIME_PATTERNS) -- a name typed directly into a question is a
+    known, accepted gap, not something this function should silently
+    attempt and get wrong."""
+    fake_supabase = _mock_supabase_table({
+        'orgs': [{'pseudonymize_entities': pseudonymize.DEFAULT_ENTITY_TYPES}],
+        'pseudonym_mappings': [],
+    })
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        pseudonymize.detect_and_register_query_entities('Is Jane Doe in these files?', 'org-1')
+    fake_supabase.table.return_value.upsert.assert_not_called()
+
+
 def test_pseudonymize_text_replaces_known_real_values():
     fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
         {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
@@ -204,6 +264,29 @@ def test_pseudonymize_text_word_boundaries_prevent_substring_corruption():
         # "Johnny" should not be corrupted because "John" is not a complete word inside it
         result = pseudonymize.pseudonymize_text('Johnny and John both signed.', 'org-1')
     assert result == 'Johnny and PERSON_aaaa both signed.'
+
+
+def test_pseudonymize_text_matches_punctuation_containing_real_value():
+    """The exact case that motivated switching from \\b to (?<!\\w)/(?!\\w)
+    (see _compile_pattern): a real_value like a phone number starts/ends
+    with punctuation, so \\b -- a transition between \\w and \\W -- never
+    matches there and the value would never be substituted. Round-trips
+    both directions so a regression here (e.g. reverting to \\b, or a
+    re.escape interaction with parentheses/dashes) is caught."""
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': '+1 (555) 123-4567', 'pseudonym': 'PHONE_NUMBER_ff00'},
+        {'real_value': '123-45-6789', 'pseudonym': 'US_SSN_ee11'},
+    ]})
+    with patch('pseudonymize.app.supabase_admin', fake_supabase):
+        forward = pseudonymize.pseudonymize_text(
+            'Call +1 (555) 123-4567 or reference SSN 123-45-6789 for verification.', 'org-1'
+        )
+        assert forward == 'Call PHONE_NUMBER_ff00 or reference SSN US_SSN_ee11 for verification.'
+
+        backward = pseudonymize.deanonymize_text(
+            'Call PHONE_NUMBER_ff00 or reference SSN US_SSN_ee11 for verification.', 'org-1'
+        )
+        assert backward == 'Call +1 (555) 123-4567 or reference SSN 123-45-6789 for verification.'
 
 
 def test_deanonymize_reverse_cache_is_atomic():
@@ -303,9 +386,9 @@ def test_reverse_cache_reflects_forward_refresh_without_waiting_out_own_ttl():
     # without touching the reverse cache directly -- isolates the scenario
     # where the forward cache refreshes on its own schedule.
     with pseudonymize._mapping_cache_lock:
-        fetched_at, mapping, pattern = pseudonymize._mapping_cache['org-1']
-        pseudonymize._mapping_cache['org-1'] = (
-            fetched_at - pseudonymize._MAPPING_CACHE_TTL_S - 1, mapping, pattern,
+        entry = pseudonymize._mapping_cache['org-1']
+        pseudonymize._mapping_cache['org-1'] = entry._replace(
+            fetched_at=entry.fetched_at - pseudonymize._MAPPING_CACHE_TTL_S - 1,
         )
 
     with patch('pseudonymize.app.supabase_admin', fake_supabase2):
@@ -362,7 +445,7 @@ def test_fetch_org_mapping_pages_past_1000_rows():
     assert mapping['Person 0'] == 'PERSON_00000000'
     assert mapping['Person 1249'] == f'PERSON_{1249:08x}'
     # Confirms two .range() pages were actually fetched (not a single call).
-    range_mock = fake_supabase.table.return_value.select.return_value.eq.return_value.range
+    range_mock = fake_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.range
     assert range_mock.return_value.execute.call_count == 2
 
 
@@ -381,15 +464,22 @@ def test_pseudonymize_text_matches_pseudonym_token_case_insensitively():
     assert result == 'Jane Doe signed the report.'
 
 
-def test_pseudonymize_text_matches_real_value_case_insensitively():
-    """Related residual-risk case from fix #3: a name typed in different
-    case than how it was indexed should still get pseudonymized."""
+def test_pseudonymize_text_forward_matching_is_case_sensitive():
+    """Forward (real_value -> pseudonym) matching is deliberately
+    case-SENSITIVE (unlike the reverse direction above): real_value's case
+    comes straight from NER on the original text, and matching it
+    case-insensitively would also pseudonymize any lowercase word that only
+    coincidentally shares a spelling with a registered value -- e.g. a
+    spaCy PERSON false positive on "May"/"Will"/"Bill" would then also
+    substitute every lowercase "may"/"will"/"bill" in unrelated prompts."""
     fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
         {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
     ]})
     with patch('pseudonymize.app.supabase_admin', fake_supabase):
-        result = pseudonymize.pseudonymize_text('JANE DOE signed the report.', 'org-1')
-    assert result == 'PERSON_ab12 signed the report.'
+        exact = pseudonymize.pseudonymize_text('Jane Doe signed the report.', 'org-1')
+        different_case = pseudonymize.pseudonymize_text('JANE DOE signed the report.', 'org-1')
+    assert exact == 'PERSON_ab12 signed the report.'
+    assert different_case == 'JANE DOE signed the report.'
 
 
 def _fake_module(name, **attrs):
@@ -488,6 +578,35 @@ def test_fetch_org_mapping_reverse_returns_pattern_without_separate_fetch():
     assert reverse_mapping == {'PERSON_ab12': 'Jane Doe'}
     assert pattern is not None
     assert pattern.search('PERSON_ab12') is not None
+
+
+def test_fetch_org_mapping_reverse_retries_instead_of_keyerror_on_concurrent_invalidation():
+    """Regression: a concurrent _invalidate_mapping_cache could pop the
+    forward cache entry between _fetch_org_mapping_reverse's unlocked
+    fetch and its lock re-acquisition -- this used to KeyError on a bare
+    `_mapping_cache[org_id]` index instead of retrying."""
+    fake_supabase = _mock_supabase_table({'pseudonym_mappings': [
+        {'real_value': 'Jane Doe', 'pseudonym': 'PERSON_ab12'},
+    ]})
+    original_fetch = pseudonymize._fetch_org_mapping_with_retry
+    call_count = {'n': 0}
+
+    def flaky_fetch(org_id):
+        call_count['n'] += 1
+        result = original_fetch(org_id)
+        if call_count['n'] == 1:
+            # Simulate another thread's _invalidate_mapping_cache landing
+            # right after this fetch repopulated the cache.
+            with pseudonymize._mapping_cache_lock:
+                pseudonymize._mapping_cache.pop(org_id, None)
+        return result
+
+    with patch('pseudonymize.app.supabase_admin', fake_supabase), \
+         patch('pseudonymize._fetch_org_mapping_with_retry', side_effect=flaky_fetch):
+        reverse_mapping, pattern = pseudonymize._fetch_org_mapping_reverse('org-1')
+
+    assert reverse_mapping == {'PERSON_ab12': 'Jane Doe'}
+    assert call_count['n'] >= 2  # had to retry after the simulated race
 
 
 def test_lazy_app_proxy_defers_import_and_stays_patchable():

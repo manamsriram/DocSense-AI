@@ -1390,6 +1390,40 @@ def test_extract_and_store_graph_pseudonymize_failure_does_not_propagate():
     openrouter_called.assert_not_called()
 
 
+def test_extract_and_store_graph_deanonymize_failure_does_not_propagate():
+    """Same fail-closed contract as the pseudonymize_text failure above, but
+    for the SECOND, distinct try/except in extract_and_store_graph -- the
+    one around deanonymize_text in the entity/triple processing loop. This
+    is a genuinely different failure point (the LLM call already
+    succeeded; it's the reverse-mapping fetch afterward that fails), and
+    must also skip graph persistence for the batch rather than let the
+    exception propagate out of index_pdf after that document's Qdrant
+    upserts already committed."""
+    from app import extract_and_store_graph
+    import json as json_module
+
+    llm_response = json_module.dumps([{
+        'chunk_index': 0,
+        'entities': [{'name': 'person_ab12', 'type': 'person', 'aliases': []}],
+        'triples': [],
+    }])
+    mock_supabase = MagicMock()
+
+    with patch('app.supabase_admin', mock_supabase), \
+         patch('app._call_openrouter_helper', return_value=llm_response), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
+         patch('pseudonymize.deanonymize_text', side_effect=Exception("reverse mapping fetch failed")), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'):
+        # Must not raise -- deanonymize_text failing mid-loop must be caught
+        # by this function's own try/except, not propagate.
+        extract_and_store_graph([('id1', 1, 'Person filed this.')], 'user-1', 'doc.pdf')
+
+    # Fail closed: node/edge writes must never be attempted once
+    # deanonymize_text failed for this batch (would otherwise persist
+    # pseudonym tokens, or a partial/mismatched entity set, to the graph).
+    mock_supabase.table.assert_not_called()
+
+
 def test_extract_and_store_graph_deanonymizes_extracted_entity_names_before_storage():
     """LLMs often echo input tokens verbatim: if the OpenRouter response contains
     a pseudonym token (because it saw pseudonymized chunk text), the graph must
@@ -1588,6 +1622,7 @@ def test_ask_file_agentic_stops_iterating_once_relevant_chunks_found():
     chunk = (0.9, '[Page 1, Source: doc.pdf] relevant content')
     with patch('app.get_collection_count', return_value=1), \
          patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
          patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
          patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
@@ -1608,6 +1643,7 @@ def test_ask_file_agentic_bounded_by_max_iterations_when_nothing_ever_relevant()
     chunk = (0.5, '[Page 1, Source: doc.pdf] never graded relevant')
     with patch('app.get_collection_count', return_value=1), \
          patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
          patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
          patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
@@ -1631,6 +1667,7 @@ def test_ask_file_agentic_grading_failure_uses_retrieved_chunks_without_burning_
     chunk = (0.7, '[Page 1, Source: doc.pdf] some content')
     with patch('app.get_collection_count', return_value=1), \
          patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
          patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
          patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
@@ -1652,6 +1689,7 @@ def test_ask_file_agentic_wall_clock_budget_stops_further_iterations():
     chunk = (0.5, '[Page 1, Source: doc.pdf] slow content')
     with patch('app.get_collection_count', return_value=1), \
          patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
          patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
          patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', return_value=['test question']), \
@@ -1679,6 +1717,7 @@ def test_ask_file_agentic_sends_pseudonymized_prompt_to_generate_text():
     chunk = (0.9, '[Page 1, Source: doc.pdf] Jane Doe signed.')
     with patch('app.get_collection_count', return_value=1), \
          patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
          patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
          patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', side_effect=lambda q: [q]), \
@@ -1691,6 +1730,74 @@ def test_ask_file_agentic_sends_pseudonymized_prompt_to_generate_text():
     assert 'Jane Doe' not in captured['prompt']
 
 
+def test_ask_file_agentic_sends_pseudonymized_chunks_to_grade_chunks():
+    """Raw chunk/question text must never reach grade_chunks -- only the
+    pseudonymized copy. Unlike the generate_text/graph-extraction call
+    sites, this one was previously untested: existing tests stubbed
+    grade_chunks with an identity side_effect and asserted only call
+    count, which would not catch a regression that skipped
+    pseudonymizing pseudo_texts/pseudo_sub_q before this call."""
+    import app
+    captured = {}
+
+    def fake_grade_chunks(sub_q, texts):
+        captured['sub_q'] = sub_q
+        captured['texts'] = texts
+        return texts, []
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Jane Doe signed.')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=fake_grade_chunks), \
+         patch('app.generate_text', return_value='Answer'):
+        app.ask_file_agentic('Who is Jane Doe?', 'user-1')
+
+    assert 'PERSON_ab12' in captured['sub_q']
+    assert 'Jane Doe' not in captured['sub_q']
+    assert all('PERSON_ab12' in t and 'Jane Doe' not in t for t in captured['texts'])
+
+
+def test_ask_file_agentic_sends_pseudonymized_query_to_reformulate_query():
+    """Same guarantee as above for reformulate_query -- only reached when
+    the first CRAG iteration finds nothing relevant, so exercised via a
+    grade_chunks side_effect that returns empty on the first call."""
+    import app
+    captured = {}
+
+    def fake_reformulate(query):
+        captured['query'] = query
+        return query
+
+    grade_calls = {'n': 0}
+
+    def fake_grade_chunks(sub_q, texts):
+        grade_calls['n'] += 1
+        if grade_calls['n'] == 1:
+            return [], texts  # nothing relevant -> triggers reformulation
+        return texts, []
+
+    chunk = (0.9, '[Page 1, Source: doc.pdf] Jane Doe signed.')
+    with patch('app.get_collection_count', return_value=1), \
+         patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
+         patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
+         patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
+         patch('app.decompose_query', side_effect=lambda q: [q]), \
+         patch('app.find_relevant_chunks_with_graph', return_value=[chunk]), \
+         patch('app.grade_chunks', side_effect=fake_grade_chunks), \
+         patch('app.reformulate_query', side_effect=fake_reformulate), \
+         patch('app.generate_text', return_value='Answer'):
+        app.ask_file_agentic('Who is Jane Doe?', 'user-1')
+
+    assert 'PERSON_ab12' in captured['query']
+    assert 'Jane Doe' not in captured['query']
+
+
 def test_ask_file_agentic_deanonymizes_final_answer():
     """The final answer handed back to the caller must be deanonymized -- an LLM
     that echoes a pseudonym token back must never leak it to the user."""
@@ -1698,6 +1805,7 @@ def test_ask_file_agentic_deanonymizes_final_answer():
     chunk = (0.9, '[Page 1, Source: doc.pdf] some text')
     with patch('app.get_collection_count', return_value=1), \
          patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
          patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
          patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t.replace('PERSON_ab12', 'Jane Doe')), \
          patch('app.decompose_query', side_effect=lambda q: [q]), \
@@ -1726,6 +1834,7 @@ def test_ask_file_agentic_pseudonymizes_conversation_history_before_generate_tex
 
     with patch('app.get_collection_count', return_value=1), \
          patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
          patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
          patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.decompose_query', side_effect=lambda q: [q]), \
@@ -1754,6 +1863,7 @@ def test_ask_file_pseudonymizes_conversation_history_before_generate_text():
     prior_turns = [{'question': 'Who is Jane Doe?', 'answer': 'Jane Doe is the CFO.'}]
 
     with patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
          patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t.replace('Jane Doe', 'PERSON_ab12')), \
          patch('pseudonymize.deanonymize_text', side_effect=lambda t, o: t), \
          patch('app.find_relevant_chunks', return_value=[chunk]), \
@@ -1779,6 +1889,7 @@ def test_ask_file_agentic_short_question_skips_decompose_deanonymize_roundtrip()
 
     with patch('app.get_collection_count', return_value=1), \
          patch('app.get_or_create_org_for_user', return_value='org-1'), \
+         patch('pseudonymize.detect_and_register_query_entities'), \
          patch('pseudonymize.pseudonymize_text', side_effect=lambda t, o: t), \
          patch('pseudonymize.deanonymize_text', side_effect=fake_deanonymize), \
          patch('app.decompose_query', side_effect=lambda q: [q]), \

@@ -656,6 +656,13 @@ def extract_page_figures(page, vision_budget=None, org_id=None):
         if found:
             excluded_bboxes.append(found[1])
         if not caption and vision_budget and vision_budget['remaining'] > 0:
+            # org_id defaults to None (some tests exercise the no-vision-
+            # budget path without it) but must be real before it's used to
+            # scope a redaction -- a None org_id would silently redact
+            # under get_org_entity_types(None)'s DEFAULT_ENTITY_TYPES
+            # fallback instead of the org's actual config. Fail loud here
+            # rather than the caller quietly getting worse redaction.
+            assert org_id is not None, "extract_page_figures: org_id is required once a vision call is reachable"
             try:
                 redacted_bytes = pseudonymize.redact_image(png_bytes, org_id)
                 caption = describe_image_with_groq(redacted_bytes, _FIGURE_CAPTION_PROMPT)
@@ -744,24 +751,30 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
     embed_texts = []
     graph_eligible = []   # (point_id, page_num, display_text) across all flushes, for graph pass below
     total_indexed = 0
+    dropped_count = 0   # chunks dropped fail-closed on pseudonymization failure -- see flush()
     counts = {'text': 0, 'table': 0, 'figure': 0, 'scanned': 0}
     vision_budget = {'remaining': MAX_VISION_CALLS_PER_DOC}
 
     def flush():
-        nonlocal points, embed_texts, total_indexed
+        nonlocal points, embed_texts, total_indexed, dropped_count
         if not points:
             return
         # Fail closed: a chunk whose PII entities failed to register would
         # never get substituted by pseudonymize_text on any later LLM call
         # (grading, synthesis, graph extraction), silently leaking its raw
         # PII to a third-party provider. Drop the chunk entirely rather
-        # than index it half-protected.
+        # than index it half-protected. dropped_count is surfaced by the
+        # caller (see below) so a systemically broken pseudonymization
+        # pipeline (bad PSEUDONYM_SECRET, missing spaCy model, blocked
+        # Supabase writes, ...) shows up as a visible signal instead of
+        # only individual per-chunk error log lines.
         ok_points, ok_embed_texts = [], []
         for point, embed_text in zip(points, embed_texts):
             _, _, display_text, _ = point
             try:
                 pseudonymize.detect_and_register_entities(display_text, org_id)
             except Exception as e:
+                dropped_count += 1
                 logging.error(f"[pseudonymize] entity registration failed for org {org_id}, skipping chunk (fail-closed): {e}")
                 continue
             ok_points.append(point)
@@ -857,6 +870,18 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
 
     doc.close()
     flush()
+
+    if dropped_count:
+        # Aggregate signal distinct from flush()'s per-chunk error lines --
+        # lets an operator/alerting pipeline tell "this doc legitimately had
+        # no extractable text" apart from "the pseudonymization pipeline is
+        # systemically broken and has been dropping every chunk." Logged
+        # even when total_indexed == 0 (previously the early return below
+        # skipped ALL logging in that case, including this one).
+        logging.error(
+            f"[pseudonymize] {dropped_count}/{dropped_count + total_indexed} chunks dropped "
+            f"for {filename} (user {user_id[:8]}...) due to entity-registration failures"
+        )
 
     if total_indexed == 0:
         return 0
@@ -1067,7 +1092,7 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
             for i, (_, _, text) in enumerate(batch_chunks)
         )
     except Exception as e:
-        logging.warning(f"[graph] pseudonymize_text failed for batch in {source_doc}, skipping graph extraction: {e}")
+        logging.error(f"[graph] pseudonymize_text failed for batch in {source_doc}, skipping graph extraction (fail-closed): {e}")
         return
     try:
         raw = _call_openrouter_helper(
@@ -1135,7 +1160,7 @@ def extract_and_store_graph(batch_chunks, user_id, source_doc):
         # closed here too: skip graph persistence entirely for this batch
         # rather than let a mid-loop failure propagate out of index_pdf
         # after that document's Qdrant upserts already succeeded.
-        logging.warning(f"[graph] deanonymize_text failed for batch in {source_doc}, skipping graph persistence: {e}")
+        logging.error(f"[graph] deanonymize_text failed for batch in {source_doc}, skipping graph persistence (fail-closed): {e}")
         return
 
     if nodes_to_upsert:
@@ -1860,6 +1885,11 @@ def _pseudonymize_conversation_history(conversation_history, org_id):
 def ask_file(question, user_id, conversation_history=None):
     """Return (response_text, sources) for a specific user's documents."""
     org_id = get_or_create_org_for_user(user_id)
+    # The question was never ingested, so pseudonymize_text alone would
+    # leave any PII typed directly into it unchanged -- register structured
+    # PII in it first. See detect_and_register_query_entities for scope
+    # (regex-only, no PERSON/LOCATION).
+    pseudonymize.detect_and_register_query_entities(question, org_id)
     complexity = estimate_query_complexity(question)
     scored_chunks = find_relevant_chunks(question, user_id, top_n=complexity['top_n'], top_k=complexity['top_k'])
     if not scored_chunks:
@@ -1899,6 +1929,10 @@ def ask_file_agentic(question, user_id, conversation_history=None):
             return "No documents have been indexed yet. Please upload a PDF first.", []
 
         org_id = get_or_create_org_for_user(user_id)
+        # The question was never ingested, so pseudonymize_text alone would
+        # leave any PII typed directly into it unchanged -- register
+        # structured PII in it first (see ask_file's identical call).
+        pseudonymize.detect_and_register_query_entities(question, org_id)
         pseudo_question = pseudonymize.pseudonymize_text(question, org_id)
 
         sub_queries_pseudo = _timed("decompose_query", decompose_query, pseudo_question)
@@ -1945,7 +1979,18 @@ def ask_file_agentic(question, user_id, conversation_history=None):
                     relevant_pseudo, _ = _timed(f"grade_chunks_iter{iteration}", grade_chunks, pseudo_sub_q, pseudo_texts)
                     # grade_chunks returns a subset of its input list by value;
                     # map back to the matching raw texts by position.
-                    relevant = [texts[pseudo_texts.index(pt)] for pt in relevant_pseudo]
+                    try:
+                        relevant = [texts[pseudo_texts.index(pt)] for pt in relevant_pseudo]
+                    except ValueError:
+                        # A genuine chunk-mapping bug (grading echoed back a
+                        # chunk that doesn't byte-for-byte match any input),
+                        # not a provider/network failure -- give it its own
+                        # log line rather than letting the outer catch-all
+                        # below silently attribute it to "pipeline error,
+                        # falling back to ask_file" alongside real provider
+                        # outages, which would hide a reproducible bug.
+                        logging.warning(f"[agentic] grade_chunks returned a chunk not present in its input for '{sub_q}', using retrieved chunks as-is")
+                        relevant = texts
                 except GradingUnavailableError:
                     logging.warning(f"[agentic] grading unavailable, using retrieved chunks as-is for '{sub_q}'")
                     relevant = texts
@@ -1996,7 +2041,12 @@ def ask_file_agentic(question, user_id, conversation_history=None):
         return response, sources
 
     except Exception as e:
-        logging.error(f"[agentic] pipeline error, falling back to ask_file: {e}", exc_info=True)
+        # Deliberately broad (provider/network failures anywhere in this
+        # pipeline should fall back, not 500) -- but logging the exception
+        # TYPE, not just its message, keeps a real regression here
+        # (e.g. a bug in pseudonymize.py) distinguishable in logs from an
+        # ordinary Groq/OpenRouter timeout, both of which land here.
+        logging.error(f"[agentic] pipeline error ({type(e).__name__}), falling back to ask_file: {e}", exc_info=True)
         return ask_file(question, user_id, conversation_history=conversation_history)
 
 
