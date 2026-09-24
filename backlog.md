@@ -72,6 +72,24 @@ fix needs `enable_cpu_mem_arena=False` on the onnxruntime session (untested
 tradeoff: avoids the ratchet, costs per-call allocation overhead instead),
 or a bigger dyno.
 
+**2nd attempt, `enable_cpu_mem_arena=False` (2026-09-24), tried and
+reverted:** `enable_cpu_mem_arena=False` is natively supported by
+fastembed 0.8.0 (`TextCrossEncoder`'s `**kwargs` -> `EXPOSED_SESSION_OPTIONS`,
+see `fastembed/common/onnx_model.py`) — passed it directly, no OOM this
+time, deploy stayed healthy. But the live 35-case eval, which normally
+finishes in ~17min (~30s/question), was still running after 33+ minutes
+and never completed — the main app's own `/health` check measured 66.6s
+round-trip mid-run, meaning the eval was still far from done at 30min+, well
+past any reasonable regression tolerance. Per-call allocation overhead from
+disabling the arena appears to be severe enough on this dyno tier to make
+L-12-v2 impractical here even without OOM.
+Commits: `1798bd7` (attempt), `1ef3742` (revert).
+
+Conclusion: L-12-v2 is not viable on the current 512MB rerank dyno under
+either the default arena (OOMs) or `enable_cpu_mem_arena=False` (too
+slow). Staying on L-6-v2. Reopening this only makes sense with a bigger
+dyno (untested) — item 2 closed as "not viable at current tier" otherwise.
+
 ### 3. Benchmark data quality issue (flagged, not fixed)
 `q11_center_highest_built_assets_2023`'s reference answer says "Wallops
 Flight Facility with 625 built assets," but the actual 2023 table shows
