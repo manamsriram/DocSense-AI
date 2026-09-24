@@ -39,11 +39,38 @@ correctness 1.0, weighted_rag_score 0.81. No metric regressed vs. the
 0.426-0.652 noisy baseline range. Item closed.
 
 ### 2. Embedding / reranker model swap
-Original question that opened this line of work. Deferred — current small
-models (all-MiniLM-L6-v2 embed, ms-marco-MiniLM-L-6-v2 rerank) run on
-separate 512MB Render dynos; a bigger model needs a RAM bump too. Only
-worth revisiting once retrieval-side bugs (chunking, grading, cutoffs) are
-exhausted, so any measured gain isn't just noise from an unrelated fix.
+Original question that opened this line of work. Embed side done (swapped
+to BAAI/bge-small-en-v1.5, see 2026-09-22 entries above). Reranker side
+tried and reverted (2026-09-24):
+
+Attempted `Xenova/ms-marco-MiniLM-L-6-v2` -> `Xenova/ms-marco-MiniLM-L-12-v2`
+in `model_service/service.py:32` and `Dockerfile:18` (commit 367c566),
+deployed live. Render killed the rerank instance mid-eval-run with
+"HTTP health check failed (timed out after 5 seconds)" — an OOM kill on
+the 512MB dyno, not an actual health-check bug.
+
+Root cause: `RERANK_BATCH_SIZE = 3` and the every-other-batch
+`gc.collect()` cadence (`service.py:77-104`) were tuned for L-6-v2's ONNX
+arena footprint on this dyno tier (see the MODEL_ROLE split comment at
+`service.py:14-15`). onnxruntime's default CPU allocator uses an arena
+that grows across inference calls and does **not** release memory back to
+the OS between calls (`Dockerfile:41` already flagged this for L-6-v2).
+`gc.collect()` only reclaims Python-level cyclic garbage — it cannot free
+that native arena, so it was never actually bounding arena growth, just
+Python object churn. L-6-v2 stayed under budget because its per-batch
+arena ceiling was small enough that the ratchet never crossed 512MB in a
+session's lifetime; L-12-v2's larger hidden-layer activations raised that
+ceiling enough to cross it partway through the live eval's 35 sequential
+questions (denser request volume than normal prod traffic).
+Reverted: `service.py`/`Dockerfile` back to L-6-v2 (commit after 367c566).
+
+Follow-up if L-12-v2 (or the bigger `mxbai-rerank-xsmall-v1`, not in
+fastembed's supported list and needing a different loading path — separate
+scoping) is revisited: shrinking `RERANK_BATCH_SIZE` further only slows
+the ratchet, doesn't stop it, since the arena still never releases. Real
+fix needs `enable_cpu_mem_arena=False` on the onnxruntime session (untested
+tradeoff: avoids the ratchet, costs per-call allocation overhead instead),
+or a bigger dyno.
 
 ### 3. Benchmark data quality issue (flagged, not fixed)
 `q11_center_highest_built_assets_2023`'s reference answer says "Wallops

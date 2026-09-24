@@ -29,7 +29,7 @@ if MODEL_ROLE == 'embed':
 else:
     from fastembed.rerank.cross_encoder import TextCrossEncoder
     _reranker_model = TextCrossEncoder(
-        model_name='Xenova/ms-marco-MiniLM-L-12-v2',
+        model_name='Xenova/ms-marco-MiniLM-L-6-v2',
         cache_dir=CACHE_DIR,
         threads=1
     )
