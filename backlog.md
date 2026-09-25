@@ -98,6 +98,69 @@ like an error in the benchmark's reference answer itself. Per CLAUDE.md
 ("do not silently change the benchmark"), needs explicit sign-off before
 touching evals/benchmark.jsonl.
 
+**Extension (2026-09-24), broader authenticity check:** user asked whether
+the eval PDFs and QA set are even trustworthy. Verified:
+
+- PDFs are genuine. Downloaded `eo13287_nasareport_2023.pdf` and
+  `final-2020-nasa-triennial-report-2020.9.24-tagged.pdf` straight from
+  Supabase Storage (`pdfs` bucket, via `documents` table storage_path) and
+  cross-checked against the same files hosted live on nasa.gov/achp.gov —
+  identical source documents, not fabricated.
+- Core benchmark numbers are grounded in the real PDF text, not invented.
+  Extracted per-page text (pdfplumber) and confirmed `TOTALS 232,395 5,136`
+  (2020 doc) and `TOTALS 232,395 5,409` (2023 doc) appear verbatim in each
+  center/facility table — matches q1/q2/q3's reference answers and the 273
+  difference exactly.
+- `nasa_eo13287_benchmark.jsonl`'s `pages` field is off by a front-matter
+  offset (points to the PDF's *printed* page number, not absolute PDF page
+  index) — cosmetic only, since `run_eval.py` scores from `benchmark.jsonl`
+  (`reference_answer`/`must_include`), not from `nasa_eo13287_benchmark.jsonl`'s
+  `pages`/`evidence` fields, which aren't consumed by the scoring path at all.
+- Net: the q11 error above is real and still needs fixing, but it's an
+  isolated authoring mistake, not a sign the benchmark is fabricated or
+  untrustworthy as a whole.
+
+**Future direction discussed, not started:** for a source with less
+self-authoring risk than hand-written benchmark entries, consider adding
+**FinQA** (`Aiera/finqa-verified` on HF — 91 human-verified QA pairs, or
+`ibm/finqa` for the full 8k) as a second eval corpus, paired with the
+matching full 10-K/10-Q PDF pulled directly from SEC EDGAR (public domain)
+rather than FinQA's own extracted table images — gives a genuine full
+document to ingest through DocSense's real pipeline plus externally
+peer-reviewed QA, alongside (not replacing) the current NASA/Iron Mountain
+set. RAGTruth was considered and ruled out — it ships QA + labeled model
+outputs for hallucination detection, no source documents, so there's
+nothing to ingest.
+
+Sizing check done before pulling anything: existing corpus's largest doc
+(`NYSE_IRM_2023.pdf`) indexes to 836-925 chunks and runs fine — a single
+10-K is comparable, safe to ingest. Real constraint is eval-run rerank
+call *volume*, not doc size (dyno crashes in items 2/7 came from
+cumulative `/rerank` calls across a run) — so pilot with a small QA
+subset (10-15) run standalone, not appended to the existing 35-case run,
+and scale up only if clean.
+
+Scoped `Aiera/finqa-verified` (91 rows, no per-row document/company
+field) for a single-filing pilot: only 3 rows mention Entergy Corporation
+by name (rows 0, 36, 50), and each cites a different fiscal year (2015,
+2012, ~2003) — three different 10-Ks, not one filing to pair with a
+single PDF. This 91-row set is too sparse per-company for a same-filing
+10-15 question pilot. `ibm/finqa` (full ~8k rows) almost certainly has
+denser per-company coverage and should be checked first next time this
+is picked up.
+
+Candidate matched so far (kept for reference, not yet pulled):
+row 0 — "what is the net change in net revenue during 2015 for entergy
+corporation?" (answer 94.0) — matches Entergy Corp's real FY2015 10-K,
+confirmed on SEC EDGAR:
+https://www.sec.gov/Archives/edgar/data/0000065984/000006598416000436/etr-12312015x10k.htm
+(CIK 0000065984). QA source:
+https://huggingface.co/datasets/Aiera/finqa-verified.
+
+**Not started — picking up later.** Next session should check `ibm/finqa`
+for a denser single-company subset before defaulting to Entergy's 3 thin
+rows, then download both, then follow the sizing/pilot approach above.
+
 ### 4. Remove temporary /debug/* endpoints
 `/debug/retrieval` and `/debug/page_chunks` in app.py (marked with
 `# ponytail: temporary diagnostic endpoint`) were added to inspect
