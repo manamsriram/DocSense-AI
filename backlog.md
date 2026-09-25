@@ -152,6 +152,98 @@ merge:
   12-22s (network path, embedding-call latency, Qdrant load) as a separate
   session.
 
+**Attempt (2026-09-24), tried and reverted:** raised
+`CRAG_WALL_CLOCK_BUDGET_S` default 12->25 in `app.py`. Unit tests passed
+(143/143), but a live local eval against real Qdrant/model services
+crashed the prod rerank dyno mid-run (`503 Service Unavailable` then
+`429 Too Many Requests` on `/rerank`, then a `HTTP health check failed
+(timed out after 5 seconds)` restart) — the same OOM/arena-ratchet
+signature as item 2, on the currently-deployed `L-6-v2` model, which had
+been stable before this change.
+
+Root cause: at 12s, most slow-retrieval questions got cut off after their
+*first* CRAG iteration, since retrieval alone often already takes
+12-33s — the tight budget was accidentally acting as a rate limiter on
+how many `/rerank` calls a single slow question could generate. Raising
+it to 25s let more iterations/sub-queries survive the check
+(`retrieval_iter1` went from ~0 to 4 occurrences across 39 in one eval
+run), increasing `/rerank` call volume in the same wall-clock window.
+Since onnxruntime's arena never releases memory between calls
+(`service.py:14-15`, same note as item 2) and the rerank dyno serializes
+all calls through one lock (`service.py:82`, single 512MB instance), more
+calls stacking up is enough to trip the same ratchet regardless of model
+size — the budget fix and item 2's model-size fix hit the same downstream
+constraint from two different directions.
+
+Reverted `app.py` back to the 12s default (net no-op diff).
+
+Conclusion: this item can't be fixed by raising the wall-clock budget
+alone without first addressing rerank capacity (item 2's dyno is the
+shared bottleneck) — doing so trades "some slow questions get cut short"
+for "the rerank service falls over for everyone mid-eval." Needs either:
+a bigger/less marginal rerank dyno, a per-iteration (not just overall)
+rerank call budget/concurrency cap, or the adaptive-budget approach
+(scale the timeout to *observed* retrieval latency per call rather than a
+blanket raise) so slow questions don't multiply rerank load unboundedly.
+Reopen only alongside a rerank-capacity fix.
+
+**2026-09-24, two follow-ups landed:**
+
+1. **Embed timing instrumentation.** Added `_timed()` wrapping around all
+   four `get_embedding_model().embed(...)` call sites in `app.py`:
+   `embed_ingest` (bulk ingestion), `embed_query` (hot path, once per CRAG
+   iteration/sub-query in `hybrid_search`), `embed_cache_lookup` and
+   `embed_cache_store` (semantic cache). Previously embed latency was
+   folded into the outer `retrieval_iterN` total with no way to isolate
+   it. Needed before any embed speed-up work — can't fix what isn't
+   measured. Not yet run against live traffic to see the actual split.
+
+2. **Rerank capacity fix, attempt 1: app-side concurrency cap.** Added
+   `RERANK_MAX_CONCURRENT` (default 2, env-configurable) via a
+   `threading.Semaphore` around `_RemoteReranker.rerank()` (app.py), logging
+   `rerank_semaphore_wait` when a call queues >50ms. Caps how many
+   concurrent `/rerank` HTTP calls this app instance sends, independent of
+   `CRAG_WALL_CLOCK_BUDGET_S` — protects the single-worker rerank dyno from
+   a multi-user concurrent-request pileup.
+   **Caveat, important:** this does *not* fix the specific failure mode
+   from the attempt above. That crash came from single-sequential eval
+   traffic (one question at a time, no concurrency) accumulating enough
+   total `/rerank` calls to hit the dyno's `--max-requests 40` recycle
+   threshold sooner — a call-*volume* problem, not a call-*concurrency*
+   problem. A semaphore of 2 does nothing to reduce total request count
+   over time. This change is real protection for concurrent multi-user
+   prod traffic, but reopening the CRAG budget increase still needs one
+   of: a bigger dyno, a per-request/session rerank-call budget, or the
+   adaptive-timeout approach — unchanged from the conclusion above.
+   143/143 unit tests pass with both changes; not yet re-verified with a
+   live eval run (rerank dyno was mid-recovery from the earlier crash at
+   time of writing).
+
+   **Live eval re-verification (same session, ~20min later):** 35 cases,
+   0 failures, weighted_rag_score 0.4685, citation_quality 0.686,
+   groundedness 0.452, latency_sec 27.9 (all in-line with the historical
+   noisy 0.426-0.652 range — no gate tripped). Rerank dyno stayed fully
+   healthy the entire run: zero 429/503/health-timeout errors, zero
+   `rerank_semaphore_wait` events (expected — eval traffic is sequential,
+   so the concurrency cap had nothing to queue; this run doesn't exercise
+   it, only confirms it doesn't break anything). Note this run's absolute
+   score is confounded by simultaneous quota exhaustion on all three LLM
+   providers (Groq daily TPD maxed, Gemini free-tier maxed, OpenRouter
+   `402 Payment Required` out of credits) — every answer fell through to
+   the last-resort fallback model, depressing correctness/completeness
+   independent of these changes. Retrieval-side metrics (citation_quality,
+   groundedness, latency, failures) are what's actually informative here
+   and all look normal.
+
+   `embed_query` timing (new instrumentation, 32 samples): consistently
+   300-700ms, no outliers. Confirms embed is *not* the retrieval
+   bottleneck — `retrieval_iter0` totals of 15-33s are dominated by
+   Qdrant/rerank/graph-expansion, not embedding. No embed speed-up work
+   is warranted right now; closing that half of this investigation.
+
+   **Kept both changes** (embed instrumentation + rerank semaphore) —
+   no regression gate tripped, 143/143 tests pass.
+
 ## Notes on process
 - Always re-run `python evals/run_eval.py` against the live endpoint after
   any change — local eval doesn't reflect prod's ingestion path or real

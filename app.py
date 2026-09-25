@@ -187,9 +187,24 @@ class _RemoteEmbedder:
         return [np.array(v) for v in resp.json()['vectors']]
 
 
+# Caps concurrent outbound /rerank calls from this app instance, independent
+# of CRAG_WALL_CLOCK_BUDGET_S -- a slow-retrieval question surviving more CRAG
+# iterations (see backlog item 7) must not be able to pile concurrent load onto
+# the single-worker rerank dyno; queue here app-side instead of overwhelming it.
+# ponytail: fixed at 2, retune via env if the dyno's real concurrency ceiling
+# turns out to be different once measured under live multi-user traffic.
+RERANK_MAX_CONCURRENT = int(os.getenv('RERANK_MAX_CONCURRENT', '2'))
+_rerank_semaphore = threading.Semaphore(RERANK_MAX_CONCURRENT)
+
+
 class _RemoteReranker:
     def rerank(self, query, documents):
-        resp = _post_with_retry(f'{RERANK_SERVICE_URL}/rerank', {'query': query, 'documents': list(documents)})
+        t_wait = time.perf_counter()
+        with _rerank_semaphore:
+            wait_ms = (time.perf_counter() - t_wait) * 1000
+            if wait_ms > 50:
+                logging.info(f"[perf] rerank_semaphore_wait: {wait_ms:.1f}ms")
+            resp = _post_with_retry(f'{RERANK_SERVICE_URL}/rerank', {'query': query, 'documents': list(documents)})
         return resp.json()['scores']
 
 
@@ -807,7 +822,7 @@ def index_pdf(pdf_path, user_id, force=False, display_name=None):
         points, embed_texts = ok_points, ok_embed_texts
         if not points:
             return
-        vecs = list(get_embedding_model().embed(embed_texts))
+        vecs = list(_timed("embed_ingest", get_embedding_model().embed, embed_texts))
         qdrant.upsert(
             collection_name=COLLECTION,
             points=[
@@ -1038,7 +1053,7 @@ def hybrid_search(query, user_id, top_k=20):
     # Dense retrieval via Qdrant, filtered to this org. bge-small-en-v1.5 needs
     # this instruction prefix on queries (not passages) for asymmetric
     # retrieval per the model card; skipping it measurably hurts recall.
-    query_vec = list(get_embedding_model().embed([BGE_QUERY_PREFIX + query]))[0].tolist()
+    query_vec = list(_timed("embed_query", get_embedding_model().embed, [BGE_QUERY_PREFIX + query]))[0].tolist()
     hits = qdrant.query_points(
         collection_name=COLLECTION,
         query=query_vec,
@@ -2557,7 +2572,7 @@ def ask():
         query_vec = None
         kb_version = None
         if response is None and cache_key:
-            query_vec = list(get_embedding_model().embed([question]))[0].tolist()
+            query_vec = list(_timed("embed_cache_lookup", get_embedding_model().embed, [question]))[0].tolist()
             kb_version = get_kb_version(user_id)
             response, sources = semantic_cache_lookup(user_id, query_vec, f'{GEMINI_MODEL}|{EMBED_MODEL_VERSION}', kb_version)
             from_cache = response is not None
@@ -2569,7 +2584,7 @@ def ask():
             if not from_cache and cache_key:
                 cache_response(cache_key, response, sources)
                 if query_vec is None:
-                    query_vec = list(get_embedding_model().embed([question]))[0].tolist()
+                    query_vec = list(_timed("embed_cache_store", get_embedding_model().embed, [question]))[0].tolist()
                     kb_version = get_kb_version(user_id)
                 semantic_cache_store(user_id, question, query_vec, response, sources, f'{GEMINI_MODEL}|{EMBED_MODEL_VERSION}', kb_version)
             # Always save to history when a session is active so subsequent

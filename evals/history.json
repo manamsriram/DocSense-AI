@@ -203,5 +203,47 @@
     "retrieval_recall": 0.5857142857142857,
     "latency_sec": 29.650648832321167,
     "weighted_rag_score": 0.6039956925088702
+  },
+  {
+    "num_cases": 35,
+    "failures": 35,
+    "failure_types": {
+      "http_401": 35
+    },
+    "correctness": 0.0,
+    "groundedness": 0.0,
+    "citation_quality": 0.0,
+    "completeness": 0.0,
+    "retrieval_recall": 0.0,
+    "latency_sec": 0.0,
+    "weighted_rag_score": 0.0
+  },
+  {
+    "num_cases": 35,
+    "failures": 5,
+    "failure_types": {
+      "timeout": 1,
+      "other": 2,
+      "infra_5xx": 2
+    },
+    "correctness": 0.3338896745041417,
+    "groundedness": 0.29786251202331826,
+    "citation_quality": 0.45714285714285713,
+    "completeness": 0.23809523809523808,
+    "retrieval_recall": 0.23809523809523808,
+    "latency_sec": 77.88390537897746,
+    "weighted_rag_score": 0.3242119739979624
+  },
+  {
+    "num_cases": 35,
+    "failures": 0,
+    "failure_types": {},
+    "correctness": 0.4863997910525399,
+    "groundedness": 0.4519894595861893,
+    "citation_quality": 0.6857142857142857,
+    "completeness": 0.2904761904761905,
+    "retrieval_recall": 0.42857142857142855,
+    "latency_sec": 27.93608786719186,
+    "weighted_rag_score": 0.4685096622699442
   }
 ]
